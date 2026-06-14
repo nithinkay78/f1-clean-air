@@ -46,6 +46,10 @@ _track_status: dict = {}
 _file_pos = 0
 _prev_positions: dict[str, int] = {}
 _position_deltas: dict[str, int] = {}
+_interval_samples: dict[str, list[float]] = {}
+_stint_lap_times: dict[str, list[float]] = {}
+_last_seen_lap: dict[str, int] = {}
+_last_seen_compound: dict[str, str] = {}
 
 
 # --- Collector (F1 public live timing feed, no auth) -----------------------
@@ -173,6 +177,27 @@ def _read_new_lines() -> None:
         _apply_message(topic, data)
 
 
+def _parse_float(value) -> float | None:
+    if not value:
+        return None
+    try:
+        return float(value.lstrip("+"))
+    except ValueError:
+        return None
+
+
+def _parse_lap_seconds(value) -> float | None:
+    if not value:
+        return None
+    try:
+        if ":" in value:
+            minutes, seconds = value.split(":")
+            return float(minutes) * 60 + float(seconds)
+        return float(value)
+    except ValueError:
+        return None
+
+
 def build_snapshot() -> dict:
     with _lock:
         _read_new_lines()
@@ -202,6 +227,45 @@ def build_snapshot() -> dict:
                     _position_deltas[num] = prev - position
                 _prev_positions[num] = position
 
+            # Gap trend: closing / opening / stable, based on recent interval samples.
+            interval_val = _parse_float((timing.get("IntervalToPositionAhead") or {}).get("Value"))
+            if interval_val is not None:
+                samples = _interval_samples.setdefault(num, [])
+                if not samples or samples[-1] != interval_val:
+                    samples.append(interval_val)
+                    del samples[:-5]
+
+            gap_trend = None
+            samples = _interval_samples.get(num, [])
+            if len(samples) >= 3:
+                delta = samples[-1] - samples[0]
+                if delta < -0.05:
+                    gap_trend = "closing"
+                elif delta > 0.05:
+                    gap_trend = "opening"
+                else:
+                    gap_trend = "stable"
+
+            # Tyre degradation: current lap time vs. average of the rest of the stint.
+            compound = current_stint.get("Compound") if current_stint else None
+            if compound != _last_seen_compound.get(num):
+                _stint_lap_times[num] = []
+                _last_seen_compound[num] = compound
+
+            laps_val = timing.get("NumberOfLaps")
+            last_lap_val = _parse_lap_seconds((timing.get("LastLapTime") or {}).get("Value"))
+            if last_lap_val is not None and laps_val != _last_seen_lap.get(num):
+                stint_times = _stint_lap_times.setdefault(num, [])
+                stint_times.append(last_lap_val)
+                del stint_times[:-10]
+                _last_seen_lap[num] = laps_val
+
+            tyre_degradation = None
+            stint_times = _stint_lap_times.get(num, [])
+            if len(stint_times) >= 4:
+                baseline = sum(stint_times[:-1]) / len(stint_times[:-1])
+                tyre_degradation = "high" if stint_times[-1] > baseline * 1.03 else "normal"
+
             rows.append(
                 {
                     "racing_number": num,
@@ -220,6 +284,8 @@ def build_snapshot() -> dict:
                     "compound": current_stint.get("Compound") if current_stint else None,
                     "tyre_age": current_stint.get("TotalLaps") if current_stint else None,
                     "position_change": _position_deltas.get(num, 0),
+                    "gap_trend": gap_trend,
+                    "tyre_degradation": tyre_degradation,
                 }
             )
 

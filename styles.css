@@ -183,6 +183,13 @@ footer {
 .diff-bad { color: var(--danger); }
 .diff-flat { color: var(--silver); }
 
+.trend { font-size: 11px; font-weight: 600; white-space: nowrap; }
+.trend-closing { color: var(--gain); }
+.trend-opening { color: var(--danger); }
+.trend-stable { color: var(--silver); }
+
+.degradation { margin-left: 6px; color: var(--neutral); font-size: 12px; }
+
 /* Settings */
 .settings { position: relative; margin-left: auto; }
 .settings-btn {
@@ -266,3 +273,26 @@ td.mono, th.mono { font-family: "JetBrains Mono", ui-monospace, monospace; }
 .ref-table-list thead th { font-size: 11px; }
 .ref-table-list tbody tr { cursor: pointer; }
 .ref-table-list tbody tr:hover td { background: var(--graphite); }
+
+/* Table scroll wrapper (mobile) */
+.table-scroll { overflow-x: auto; }
+
+/* Mobile */
+@media (max-width: 768px) {
+  nav { padding: 14px 16px; flex-wrap: wrap; gap: 10px; }
+  nav .links a { margin-left: 0; margin-right: 16px; }
+
+  .hero { padding: 50px 16px 40px; }
+  .hero h1 { font-size: 32px; }
+  .hero p.lead { font-size: 15px; }
+
+  .section { padding: 32px 16px; }
+  .ref-wrap { padding: 16px; }
+
+  .ticker-item { padding: 0 14px; font-size: 12px; }
+
+  .live-wrap { padding: 16px; }
+  .live-header h1 { font-size: 16px; }
+  table { font-size: 12px; }
+  th, td { padding: 8px; }
+}

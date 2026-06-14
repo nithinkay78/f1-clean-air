@@ -34,6 +34,7 @@
         </div>
       </div>
     </div>
+    <div class="table-scroll">
     <table>
       <thead>
         <tr>
@@ -42,6 +43,7 @@
           <th>Team</th>
           <th class="mono">Gap</th>
           <th class="mono">Interval</th>
+          <th>Trend</th>
           <th class="mono">Last Lap</th>
           <th class="mono">Best Lap</th>
           <th>Tyre</th>
@@ -50,6 +52,7 @@
       </thead>
       <tbody id="rows"></tbody>
     </table>
+    </div>
     <div class="updated" id="updated"></div>
   </div>
 
@@ -155,9 +158,10 @@ function render(data) {
       <td>${d.team || ''}</td>
       <td class="mono">${d.gap_to_leader || ''} ${settings.showDiffs ? diffBadge(diffs.gap) : ''}</td>
       <td class="mono">${d.interval || ''} ${settings.showDiffs ? diffBadge(diffs.interval) : ''}</td>
+      <td>${trendBadge(d.gap_trend)}</td>
       <td class="mono">${d.last_lap || ''} ${settings.showDiffs ? diffBadge(diffs.last_lap) : ''}</td>
       <td class="mono">${d.best_lap || ''}</td>
-      <td>${d.compound ? `<span class="tyre-badge ${tyreClass}">${d.compound[0]} ${d.tyre_age ?? ''}</span>` : ''}</td>
+      <td>${d.compound ? `<span class="tyre-badge ${tyreClass}">${d.compound[0]} ${d.tyre_age ?? ''}</span>${degradationBadge(d.tyre_degradation)}` : ''}</td>
       <td class="mono">${d.laps ?? ''}</td>
     `;
     rows.appendChild(tr);
@@ -166,6 +170,18 @@ function render(data) {
   renderTicker(data.drivers);
 
   document.getElementById('updated').textContent = 'Last updated: ' + new Date().toLocaleTimeString();
+}
+
+function trendBadge(trend) {
+  if (trend === 'closing') return '<span class="trend trend-closing">▼ Closing</span>';
+  if (trend === 'opening') return '<span class="trend trend-opening">▲ Opening</span>';
+  if (trend === 'stable') return '<span class="trend trend-stable">– Stable</span>';
+  return '';
+}
+
+function degradationBadge(level) {
+  if (level === 'high') return '<span class="degradation" title="Lap times trending above stint average">⚠</span>';
+  return '';
 }
 
 function moveBadge(change) {
