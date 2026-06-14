@@ -39,6 +39,8 @@ _drivers: dict[str, dict] = {}
 _session_info: dict = {}
 _track_status: dict = {}
 _file_pos = 0
+_prev_positions: dict[str, int] = {}
+_position_deltas: dict[str, int] = {}
 
 
 # --- Collector (F1 public live timing feed, no auth) -----------------------
@@ -184,6 +186,17 @@ def build_snapshot() -> dict:
             elif isinstance(stints, list) and stints:
                 current_stint = stints[-1]
 
+            try:
+                position = int(timing.get("Position"))
+            except (TypeError, ValueError):
+                position = None
+
+            if position is not None:
+                prev = _prev_positions.get(num)
+                if prev is not None and prev != position:
+                    _position_deltas[num] = prev - position
+                _prev_positions[num] = position
+
             rows.append(
                 {
                     "racing_number": num,
@@ -201,6 +214,7 @@ def build_snapshot() -> dict:
                     "retired": timing.get("Retired"),
                     "compound": current_stint.get("Compound") if current_stint else None,
                     "tyre_age": current_stint.get("TotalLaps") if current_stint else None,
+                    "position_change": _position_deltas.get(num, 0),
                 }
             )
 

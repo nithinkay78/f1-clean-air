@@ -14,6 +14,10 @@
     </div>
   </nav>
 
+  <div class="ticker-wrap">
+    <div class="ticker" id="ticker"></div>
+  </div>
+
   <div class="live-wrap">
     <div class="live-header">
       <h1>Live Timing</h1>
@@ -67,7 +71,7 @@ function render(data) {
     const statusBadge = d.retired ? '<span class="out">OUT</span>'
       : d.in_pit ? '<span class="pit">PIT</span>' : '';
     tr.innerHTML = `
-      <td class="pos">${d.position ?? '-'}</td>
+      <td class="pos">${d.position ?? '-'} ${moveBadge(d.position_change)}</td>
       <td>
         <span class="team-bar" style="background:#${d.team_colour || '444'}"></span>
         <span class="tla">${d.tla || d.racing_number}</span> ${statusBadge}
@@ -83,7 +87,30 @@ function render(data) {
     rows.appendChild(tr);
   }
 
+  renderTicker(data.drivers);
+
   document.getElementById('updated').textContent = 'Last updated: ' + new Date().toLocaleTimeString();
+}
+
+function moveBadge(change) {
+  if (!change) return '';
+  if (change > 0) return `<span class="move move-up">▲${change}</span>`;
+  return `<span class="move move-down">▼${Math.abs(change)}</span>`;
+}
+
+function renderTicker(drivers) {
+  const ticker = document.getElementById('ticker');
+  const items = drivers.map(d => {
+    const cls = d.position_change > 0 ? 'move-up' : d.position_change < 0 ? 'move-down' : 'move-flat';
+    const arrow = d.position_change > 0 ? '▲' : d.position_change < 0 ? '▼' : '–';
+    const change = d.position_change ? Math.abs(d.position_change) : '';
+    return `<span class="ticker-item">
+      <span class="tla">${d.tla || d.racing_number}</span>
+      <span class="mono">${d.gap_to_leader || '-'}</span>
+      <span class="mono ${cls}">${arrow}${change}</span>
+    </span>`;
+  }).join('');
+  ticker.innerHTML = items + items;
 }
 
 refresh();
