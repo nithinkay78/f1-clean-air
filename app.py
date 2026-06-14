@@ -58,6 +58,10 @@ _last_seen_lap: dict[str, int] = {}
 _last_seen_compound: dict[str, str] = {}
 _subscribers_lock = threading.Lock()
 
+_standings_lock = threading.Lock()
+_standings_cache: list[dict] = []
+STANDINGS_URL = "https://api.jolpi.ca/ergast/f1/current/driverStandings.json"
+
 
 # --- Collector (F1 public live timing feed, no auth) -----------------------
 
@@ -106,6 +110,35 @@ def run_collector_forever() -> None:
         except Exception:
             logging.exception("live timing collector crashed, retrying in 10s")
         time.sleep(10)
+
+
+def fetch_standings() -> None:
+    try:
+        resp = requests.get(STANDINGS_URL, timeout=10)
+        resp.raise_for_status()
+        lists = resp.json()["MRData"]["StandingsTable"]["StandingsLists"]
+        rows = lists[0]["DriverStandings"] if lists else []
+        standings = [
+            {
+                "position": row.get("position"),
+                "points": row.get("points"),
+                "wins": row.get("wins"),
+                "driver_code": row["Driver"].get("code"),
+                "driver_name": f"{row['Driver'].get('givenName', '')} {row['Driver'].get('familyName', '')}".strip(),
+                "team": row["Constructors"][0]["name"] if row.get("Constructors") else None,
+            }
+            for row in rows
+        ]
+        with _standings_lock:
+            _standings_cache[:] = standings
+    except Exception:
+        logging.exception("failed to fetch driver standings")
+
+
+def run_standings_refresher() -> None:
+    while True:
+        fetch_standings()
+        time.sleep(1800)
 
 
 # --- Snapshot building -------------------------------------------------------
@@ -358,7 +391,14 @@ def _page_shell(title: str, active: str, body: str) -> str:
     <div class="links">{links}</div>
   </nav>
   {body}
-  <footer>F1 Clean Air &middot; Real analytics are only visible in clean air.</footer>
+  <footer>
+    F1 Clean Air &middot; Real analytics are only visible in clean air.
+    <div class="social-links">
+      <a href="#" target="_blank" rel="noopener">Telegram</a>
+      <a href="#" target="_blank" rel="noopener">Discord</a>
+      <a href="#" target="_blank" rel="noopener">Newsletter</a>
+    </div>
+  </footer>
   <script src="/theme.js"></script>
 </body>
 </html>"""
@@ -463,6 +503,19 @@ class Handler(BaseHTTPRequestHandler):
             self.wfile.write(body)
             return
 
+        if self.path.startswith("/api/standings"):
+            with _standings_lock:
+                standings = list(_standings_cache)
+            body = json.dumps(standings).encode("utf-8")
+            self.send_response(200)
+            self.send_header("Content-Type", "application/json")
+            self.send_header("Access-Control-Allow-Origin", "*")
+            self.send_header("Cache-Control", "no-store")
+            self.send_header("Content-Length", str(len(body)))
+            self.end_headers()
+            self.wfile.write(body)
+            return
+
         page = PAGES.get(self.path)
         if page:
             file_path = BASE_DIR / page
@@ -547,6 +600,9 @@ def main() -> None:
 
     collector_thread = threading.Thread(target=run_collector_forever, daemon=True)
     collector_thread.start()
+
+    standings_thread = threading.Thread(target=run_standings_refresher, daemon=True)
+    standings_thread.start()
 
     port = int(os.environ.get("PORT", "8000"))
     server = ThreadingHTTPServer(("0.0.0.0", port), Handler)

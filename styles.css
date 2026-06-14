@@ -140,6 +140,15 @@ footer {
   padding: 32px; border-top: 1px solid var(--border);
   color: var(--silver); font-size: 12px; text-align: center;
 }
+.social-links { margin-top: 12px; display: flex; justify-content: center; gap: 18px; }
+.social-links a {
+  color: var(--silver);
+  font-size: 12px;
+  font-weight: 600;
+  text-transform: uppercase;
+  letter-spacing: 1px;
+}
+.social-links a:hover { color: var(--accent); }
 
 /* Ticker */
 .ticker-wrap {

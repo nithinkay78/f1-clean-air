@@ -56,6 +56,35 @@
     <div class="updated" id="updated"></div>
   </div>
 
+  <div class="live-wrap">
+    <div class="live-header">
+      <h1>Drivers' Championship</h1>
+    </div>
+    <div class="table-scroll">
+    <table>
+      <thead>
+        <tr>
+          <th class="mono">Pos</th>
+          <th>Driver</th>
+          <th>Team</th>
+          <th class="mono">Points</th>
+          <th class="mono">Wins</th>
+        </tr>
+      </thead>
+      <tbody id="standings-rows"></tbody>
+    </table>
+    </div>
+  </div>
+
+  <footer>
+    F1 Clean Air &middot; Real analytics are only visible in clean air.
+    <div class="social-links">
+      <a href="#" target="_blank" rel="noopener">Telegram</a>
+      <a href="#" target="_blank" rel="noopener">Discord</a>
+      <a href="#" target="_blank" rel="noopener">Newsletter</a>
+    </div>
+  </footer>
+
 <script>
 const settings = JSON.parse(localStorage.getItem('f1cleanair_settings') || '{}');
 if (settings.showDiffs === undefined) settings.showDiffs = true;
@@ -208,10 +237,40 @@ function renderTicker(drivers) {
   ticker.innerHTML = items + items;
 }
 
-document.addEventListener('f1prefs-change', () => { if (lastData) render(lastData); });
+let lastStandings = null;
+
+function renderStandings(standings) {
+  const prefs = window.F1Prefs || { favoriteTeams: [], favoriteDrivers: [] };
+  const rows = document.getElementById('standings-rows');
+  rows.innerHTML = standings.map(s => {
+    const isFavorite = prefs.favoriteDrivers.includes(s.driver_code) || prefs.favoriteTeams.includes(s.team);
+    return `<tr class="${isFavorite ? 'favorite-row' : ''}">
+      <td class="pos">${s.position}</td>
+      <td><span class="tla">${s.driver_code || s.driver_name}</span></td>
+      <td>${s.team || ''}</td>
+      <td class="mono">${s.points}</td>
+      <td class="mono">${s.wins}</td>
+    </tr>`;
+  }).join('');
+}
+
+async function refreshStandings() {
+  try {
+    const res = await fetch('/api/standings');
+    lastStandings = await res.json();
+    renderStandings(lastStandings);
+  } catch (e) {}
+}
+
+document.addEventListener('f1prefs-change', () => {
+  if (lastData) render(lastData);
+  if (lastStandings) renderStandings(lastStandings);
+});
 
 refresh();
 setInterval(refresh, 2000);
+refreshStandings();
+setInterval(refreshStandings, 60000);
 </script>
 <script src="/theme.js"></script>
 </body>
