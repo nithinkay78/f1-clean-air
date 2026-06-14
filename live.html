@@ -24,6 +24,15 @@
     <div class="live-header">
       <h1>Live Timing</h1>
       <div class="meta" id="session-meta">Connecting…</div>
+      <div class="settings">
+        <button id="settings-btn" class="settings-btn" aria-label="Settings">⚙</button>
+        <div class="settings-panel" id="settings-panel">
+          <label>
+            <input type="checkbox" id="show-diffs" checked />
+            Show lap-to-lap changes
+          </label>
+        </div>
+      </div>
     </div>
     <table>
       <thead>
@@ -45,10 +54,56 @@
   </div>
 
 <script>
+const settings = JSON.parse(localStorage.getItem('f1cleanair_settings') || '{}');
+if (settings.showDiffs === undefined) settings.showDiffs = true;
+
+const showDiffsCheckbox = document.getElementById('show-diffs');
+showDiffsCheckbox.checked = settings.showDiffs;
+showDiffsCheckbox.addEventListener('change', () => {
+  settings.showDiffs = showDiffsCheckbox.checked;
+  localStorage.setItem('f1cleanair_settings', JSON.stringify(settings));
+  if (lastData) render(lastData);
+});
+
+document.getElementById('settings-btn').addEventListener('click', () => {
+  document.getElementById('settings-panel').classList.toggle('open');
+});
+
+const driverState = {};
+let lastData = null;
+
+function parseTimeToSeconds(t) {
+  if (!t) return null;
+  const parts = t.split(':');
+  let v;
+  if (parts.length === 2) v = parseFloat(parts[0]) * 60 + parseFloat(parts[1]);
+  else v = parseFloat(t);
+  return isNaN(v) ? null : v;
+}
+
+function parseGapToSeconds(g) {
+  if (!g) return null;
+  const v = parseFloat(g.replace('+', ''));
+  return isNaN(v) ? null : v;
+}
+
+function diffOf(prev, cur) {
+  return (prev !== null && cur !== null) ? cur - prev : null;
+}
+
+function diffBadge(delta) {
+  if (delta === null || delta === undefined) return '';
+  if (Math.abs(delta) < 0.001) return '<span class="diff diff-flat">±0.000</span>';
+  const cls = delta < 0 ? 'diff-good' : 'diff-bad';
+  const sign = delta < 0 ? '−' : '+';
+  return `<span class="diff ${cls}">${sign}${Math.abs(delta).toFixed(3)}</span>`;
+}
+
 async function refresh() {
   try {
     const res = await fetch('/api/state');
     const data = await res.json();
+    lastData = data;
     render(data);
   } catch (e) {
     document.getElementById('session-meta').textContent = 'Connection error — retrying…';
@@ -68,6 +123,25 @@ function render(data) {
   const rows = document.getElementById('rows');
   rows.innerHTML = '';
   for (const d of data.drivers) {
+    const num = d.racing_number;
+    const prev = driverState[num];
+    let diffs = (prev && prev.diffs) || {};
+
+    if (prev && prev.laps !== undefined && prev.laps !== d.laps) {
+      diffs = {
+        last_lap: diffOf(parseTimeToSeconds(prev.last_lap), parseTimeToSeconds(d.last_lap)),
+        gap: diffOf(parseGapToSeconds(prev.gap_to_leader), parseGapToSeconds(d.gap_to_leader)),
+        interval: diffOf(parseGapToSeconds(prev.interval), parseGapToSeconds(d.interval)),
+      };
+    }
+    driverState[num] = {
+      laps: d.laps,
+      last_lap: d.last_lap,
+      gap_to_leader: d.gap_to_leader,
+      interval: d.interval,
+      diffs,
+    };
+
     const tr = document.createElement('tr');
     const tyreClass = d.compound ? 'tyre-' + d.compound : '';
     const statusBadge = d.retired ? '<span class="out">OUT</span>'
@@ -79,9 +153,9 @@ function render(data) {
         <span class="tla">${d.tla || d.racing_number}</span> ${statusBadge}
       </td>
       <td>${d.team || ''}</td>
-      <td class="mono">${d.gap_to_leader || ''}</td>
-      <td class="mono">${d.interval || ''}</td>
-      <td class="mono">${d.last_lap || ''}</td>
+      <td class="mono">${d.gap_to_leader || ''} ${settings.showDiffs ? diffBadge(diffs.gap) : ''}</td>
+      <td class="mono">${d.interval || ''} ${settings.showDiffs ? diffBadge(diffs.interval) : ''}</td>
+      <td class="mono">${d.last_lap || ''} ${settings.showDiffs ? diffBadge(diffs.last_lap) : ''}</td>
       <td class="mono">${d.best_lap || ''}</td>
       <td>${d.compound ? `<span class="tyre-badge ${tyreClass}">${d.compound[0]} ${d.tyre_age ?? ''}</span>` : ''}</td>
       <td class="mono">${d.laps ?? ''}</td>
