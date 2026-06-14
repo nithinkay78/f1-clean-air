@@ -62,6 +62,19 @@ _standings_lock = threading.Lock()
 _standings_cache: list[dict] = []
 STANDINGS_URL = "https://api.jolpi.ca/ergast/f1/current/driverStandings.json"
 
+_schedule_lock = threading.Lock()
+_schedule_cache: list[dict] = []
+SCHEDULE_URL = "https://api.jolpi.ca/ergast/f1/current.json"
+
+COUNTRY_TO_ISO = {
+    "Australia": "au", "China": "cn", "Japan": "jp", "USA": "us", "Canada": "ca",
+    "Monaco": "mc", "Spain": "es", "Austria": "at", "UK": "gb", "Belgium": "be",
+    "Hungary": "hu", "Netherlands": "nl", "Italy": "it", "Azerbaijan": "az",
+    "Singapore": "sg", "Mexico": "mx", "Brazil": "br", "Qatar": "qa", "UAE": "ae",
+    "Bahrain": "bh", "Saudi Arabia": "sa", "Germany": "de", "France": "fr",
+    "Portugal": "pt", "Russia": "ru", "Turkey": "tr", "India": "in", "South Korea": "kr",
+}
+
 
 # --- Collector (F1 public live timing feed, no auth) -----------------------
 
@@ -135,9 +148,31 @@ def fetch_standings() -> None:
         logging.exception("failed to fetch driver standings")
 
 
+def fetch_schedule() -> None:
+    try:
+        resp = requests.get(SCHEDULE_URL, timeout=10)
+        resp.raise_for_status()
+        races = resp.json()["MRData"]["RaceTable"]["Races"]
+        schedule = [
+            {
+                "round": race.get("round"),
+                "race_name": race.get("raceName"),
+                "date": race.get("date"),
+                "circuit_id": race["Circuit"]["circuitId"],
+                "country": race["Circuit"]["Location"]["country"],
+            }
+            for race in races
+        ]
+        with _schedule_lock:
+            _schedule_cache[:] = schedule
+    except Exception:
+        logging.exception("failed to fetch race schedule")
+
+
 def run_standings_refresher() -> None:
     while True:
         fetch_standings()
+        fetch_schedule()
         time.sleep(1800)
 
 
@@ -357,7 +392,12 @@ def build_teams() -> list[dict]:
                 {"team_name": team_name, "team_colour": info.get("TeamColour"), "drivers": []},
             )
             team["drivers"].append(
-                {"racing_number": num, "tla": info.get("Tla"), "full_name": info.get("FullName")}
+                {
+                    "racing_number": num,
+                    "tla": info.get("Tla"),
+                    "full_name": info.get("FullName"),
+                    "headshot_url": info.get("HeadshotUrl"),
+                }
             )
 
         result = sorted(teams.values(), key=lambda t: t["team_name"])
@@ -405,6 +445,26 @@ def _page_shell(title: str, active: str, body: str) -> str:
 
 
 def render_circuits_list() -> str:
+    with _schedule_lock:
+        schedule = list(_schedule_cache)
+
+    season_cards = "".join(
+        f"""<a class="ref-card" href="/circuits/{_html.escape(race['circuit_id'])}">
+          <img class="ref-flag" src="https://flagcdn.com/w80/{COUNTRY_TO_ISO.get(race['country'], 'xx')}.png" alt="{_html.escape(race['country'])}" />
+          <h3>{_html.escape(race['race_name'])}</h3>
+          <p>Round {_html.escape(str(race['round']))} &middot; {_html.escape(race['date'])}</p>
+        </a>"""
+        for race in schedule
+        if race["circuit_id"] in CIRCUITS_BY_ID
+    )
+    season_section = (
+        f"""<h1>2026 Season</h1>
+      <div class="ref-grid">{season_cards}</div>
+      <h1 style="margin-top: 40px;">All Circuits</h1>"""
+        if season_cards
+        else "<h1>Circuits</h1>"
+    )
+
     cards = "".join(
         f"""<a class="ref-card" href="/circuits/{_html.escape(c['circuitId'])}">
           <h3>{_html.escape(c['circuitName'])}</h3>
@@ -413,7 +473,7 @@ def render_circuits_list() -> str:
         for c in CIRCUITS
     )
     body = f"""<div class="ref-wrap">
-      <h1>Circuits</h1>
+      {season_section}
       <div class="ref-grid">{cards}</div>
     </div>"""
     return _page_shell("F1 Clean Air — Circuits", "/circuits", body)
@@ -444,12 +504,28 @@ def render_drivers_list() -> str:
         for d in DRIVERS
     )
     body = f"""<div class="ref-wrap">
-      <h1>Drivers</h1>
+      <h1>Current Grid</h1>
+      <div class="ref-grid" id="current-grid"></div>
+      <h1 style="margin-top: 40px;">All Drivers</h1>
       <table class="ref-table ref-table-list">
         <thead><tr><th>Name</th><th>Nationality</th><th>Date of Birth</th></tr></thead>
         <tbody>{rows}</tbody>
       </table>
-    </div>"""
+    </div>
+    <script>
+      fetch('/api/teams').then(r => r.json()).then(teams => {{
+        const grid = document.getElementById('current-grid');
+        if (!teams.length) {{ grid.innerHTML = '<p style="color: var(--silver);">Live grid will appear during a session.</p>'; return; }}
+        grid.innerHTML = teams.flatMap(t => t.drivers.map(d => `
+          <div class="ref-card driver-card">
+            <span class="team-bar" style="background:#${{t.team_colour || '444'}}"></span>
+            ${{d.headshot_url ? `<img class="driver-photo" src="${{d.headshot_url}}" alt="${{d.full_name || d.tla}}" />` : ''}}
+            <h3>${{d.full_name || d.tla}}</h3>
+            <p>${{t.team_name}}</p>
+          </div>
+        `)).join('');
+      }}).catch(() => {{}});
+    </script>"""
     return _page_shell("F1 Clean Air — Drivers", "/drivers", body)
 
 
