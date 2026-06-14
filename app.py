@@ -10,8 +10,10 @@ import ast
 import json
 import logging
 import os
+import re
 import threading
 import time
+from datetime import datetime, timezone
 from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
 from pathlib import Path
 
@@ -21,6 +23,8 @@ from signalrcore.hub_connection_builder import HubConnectionBuilder
 
 BASE_DIR = Path(__file__).parent
 DATA_FILE = BASE_DIR / "live_data.txt"
+SUBSCRIBERS_FILE = BASE_DIR / "data" / "subscribers.txt"
+EMAIL_RE = re.compile(r"^[^@\s]+@[^@\s]+\.[^@\s]+$")
 
 CIRCUITS = json.loads((BASE_DIR / "data" / "circuits.json").read_text())
 DRIVERS = json.loads((BASE_DIR / "data" / "drivers.json").read_text())
@@ -33,10 +37,12 @@ PAGES = {
     "/live": "live.html",
     "/live.html": "live.html",
     "/styles.css": "styles.css",
+    "/theme.js": "theme.js",
 }
 CONTENT_TYPES = {
     ".html": "text/html",
     ".css": "text/css",
+    ".js": "application/javascript",
 }
 
 _lock = threading.Lock()
@@ -50,6 +56,7 @@ _interval_samples: dict[str, list[float]] = {}
 _stint_lap_times: dict[str, list[float]] = {}
 _last_seen_lap: dict[str, int] = {}
 _last_seen_compound: dict[str, str] = {}
+_subscribers_lock = threading.Lock()
 
 
 # --- Collector (F1 public live timing feed, no auth) -----------------------
@@ -304,6 +311,28 @@ def build_snapshot() -> dict:
         }
 
 
+def build_teams() -> list[dict]:
+    with _lock:
+        teams: dict[str, dict] = {}
+        for num, entry in _drivers.items():
+            info = entry.get("info", {})
+            team_name = info.get("TeamName")
+            if not team_name:
+                continue
+            team = teams.setdefault(
+                team_name,
+                {"team_name": team_name, "team_colour": info.get("TeamColour"), "drivers": []},
+            )
+            team["drivers"].append(
+                {"racing_number": num, "tla": info.get("Tla"), "full_name": info.get("FullName")}
+            )
+
+        result = sorted(teams.values(), key=lambda t: t["team_name"])
+        for team in result:
+            team["drivers"].sort(key=lambda d: d["tla"] or "")
+        return result
+
+
 # --- Reference pages (circuits / drivers) -------------------------------------
 
 
@@ -330,6 +359,7 @@ def _page_shell(title: str, active: str, body: str) -> str:
   </nav>
   {body}
   <footer>F1 Clean Air &middot; Real analytics are only visible in clean air.</footer>
+  <script src="/theme.js"></script>
 </body>
 </html>"""
 
@@ -422,6 +452,17 @@ class Handler(BaseHTTPRequestHandler):
             self.wfile.write(body)
             return
 
+        if self.path.startswith("/api/teams"):
+            body = json.dumps(build_teams()).encode("utf-8")
+            self.send_response(200)
+            self.send_header("Content-Type", "application/json")
+            self.send_header("Access-Control-Allow-Origin", "*")
+            self.send_header("Cache-Control", "no-store")
+            self.send_header("Content-Length", str(len(body)))
+            self.end_headers()
+            self.wfile.write(body)
+            return
+
         page = PAGES.get(self.path)
         if page:
             file_path = BASE_DIR / page
@@ -460,10 +501,41 @@ class Handler(BaseHTTPRequestHandler):
         self.send_response(404)
         self.end_headers()
 
+    def do_POST(self):
+        if self.path == "/api/subscribe":
+            length = int(self.headers.get("Content-Length", 0))
+            try:
+                payload = json.loads(self.rfile.read(length) or b"{}")
+            except json.JSONDecodeError:
+                payload = {}
+
+            email = (payload.get("email") or "").strip()
+            if not EMAIL_RE.match(email):
+                return self._send_json({"error": "Please enter a valid email address."}, status=400)
+
+            with _subscribers_lock:
+                SUBSCRIBERS_FILE.parent.mkdir(exist_ok=True)
+                with open(SUBSCRIBERS_FILE, "a") as f:
+                    f.write(f"{email},{datetime.now(timezone.utc).isoformat()}\n")
+
+            return self._send_json({"status": "ok"})
+
+        self.send_response(404)
+        self.end_headers()
+
     def _send_html(self, html_str: str) -> None:
         body = html_str.encode("utf-8")
         self.send_response(200)
         self.send_header("Content-Type", "text/html")
+        self.send_header("Cache-Control", "no-store")
+        self.send_header("Content-Length", str(len(body)))
+        self.end_headers()
+        self.wfile.write(body)
+
+    def _send_json(self, data: dict, status: int = 200) -> None:
+        body = json.dumps(data).encode("utf-8")
+        self.send_response(status)
+        self.send_header("Content-Type", "application/json")
         self.send_header("Cache-Control", "no-store")
         self.send_header("Content-Length", str(len(body)))
         self.end_headers()

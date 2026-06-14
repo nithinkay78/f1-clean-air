@@ -2,3 +2,4 @@ live_data.txt
 *.log
 __pycache__/
 .fastf1_cache/
+data/subscribers.txt

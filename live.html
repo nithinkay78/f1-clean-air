@@ -146,6 +146,9 @@ function render(data) {
     };
 
     const tr = document.createElement('tr');
+    const prefs = window.F1Prefs || { favoriteTeams: [], favoriteDrivers: [] };
+    const isFavorite = prefs.favoriteDrivers.includes(d.tla) || prefs.favoriteTeams.includes(d.team);
+    if (isFavorite) tr.className = 'favorite-row';
     const tyreClass = d.compound ? 'tyre-' + d.compound : '';
     const statusBadge = d.retired ? '<span class="out">OUT</span>'
       : d.in_pit ? '<span class="pit">PIT</span>' : '';
@@ -205,8 +208,11 @@ function renderTicker(drivers) {
   ticker.innerHTML = items + items;
 }
 
+document.addEventListener('f1prefs-change', () => { if (lastData) render(lastData); });
+
 refresh();
 setInterval(refresh, 2000);
 </script>
+<script src="/theme.js"></script>
 </body>
 </html>

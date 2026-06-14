@@ -277,6 +277,65 @@ td.mono, th.mono { font-family: "JetBrains Mono", ui-monospace, monospace; }
 /* Table scroll wrapper (mobile) */
 .table-scroll { overflow-x: auto; }
 
+/* Preferences (theme color + favorites) */
+.prefs { position: relative; }
+.prefs-panel { width: 240px; }
+.prefs-section { margin-bottom: 14px; }
+.prefs-section:last-child { margin-bottom: 0; }
+.prefs-title { font-size: 11px; text-transform: uppercase; letter-spacing: 1px; color: var(--silver); margin-bottom: 8px; }
+
+.swatches { display: flex; flex-wrap: wrap; gap: 8px; }
+.swatch {
+  width: 24px; height: 24px;
+  border-radius: 4px;
+  border: 1px solid var(--border);
+  cursor: pointer;
+}
+.swatch:hover { border-color: var(--text); }
+
+.chips { display: flex; flex-wrap: wrap; gap: 6px; }
+.chip {
+  background: var(--slate);
+  border: 1px solid var(--border);
+  color: var(--silver);
+  border-radius: 4px;
+  padding: 4px 10px;
+  font-size: 12px;
+  cursor: pointer;
+}
+.chip.active { color: var(--text); border-color: var(--accent); }
+
+.favorite-row td:first-child { box-shadow: inset 3px 0 0 var(--accent); }
+
+/* Newsletter */
+.newsletter { max-width: 480px; }
+.newsletter form { display: flex; gap: 8px; margin-top: 16px; }
+.newsletter input[type="email"] {
+  flex: 1;
+  background: var(--graphite);
+  border: 1px solid var(--border);
+  color: var(--text);
+  border-radius: 4px;
+  padding: 10px 14px;
+  font-size: 14px;
+}
+.newsletter button {
+  background: var(--accent);
+  color: var(--carbon);
+  border: none;
+  border-radius: 4px;
+  padding: 10px 20px;
+  font-weight: 700;
+  font-size: 13px;
+  text-transform: uppercase;
+  letter-spacing: 0.5px;
+  cursor: pointer;
+}
+.newsletter button:hover { opacity: 0.9; }
+.newsletter .msg { margin-top: 10px; font-size: 13px; }
+.msg-good { color: var(--gain); }
+.msg-bad { color: var(--danger); }
+
 /* Mobile */
 @media (max-width: 768px) {
   nav { padding: 14px 16px; flex-wrap: wrap; gap: 10px; }
@@ -295,4 +354,6 @@ td.mono, th.mono { font-family: "JetBrains Mono", ui-monospace, monospace; }
   .live-header h1 { font-size: 16px; }
   table { font-size: 12px; }
   th, td { padding: 8px; }
+
+  .newsletter form { flex-direction: column; }
 }
