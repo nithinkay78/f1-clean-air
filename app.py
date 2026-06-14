@@ -140,6 +140,10 @@ def _read_new_lines() -> None:
     if not DATA_FILE.exists():
         return
     with open(DATA_FILE, "r") as f:
+        file_size = f.seek(0, 2)
+        if _file_pos > file_size:
+            # collector reconnected and truncated the file (filemode="w")
+            _file_pos = 0
         f.seek(_file_pos)
         lines = f.readlines()
         _file_pos = f.tell()
@@ -229,6 +233,7 @@ class Handler(BaseHTTPRequestHandler):
             self.send_response(200)
             self.send_header("Content-Type", "application/json")
             self.send_header("Access-Control-Allow-Origin", "*")
+            self.send_header("Cache-Control", "no-store")
             self.send_header("Content-Length", str(len(body)))
             self.end_headers()
             self.wfile.write(body)
