@@ -21,7 +21,18 @@ from signalrcore.hub_connection_builder import HubConnectionBuilder
 
 BASE_DIR = Path(__file__).parent
 DATA_FILE = BASE_DIR / "live_data.txt"
-INDEX_FILE = BASE_DIR / "index.html"
+
+PAGES = {
+    "/": "index.html",
+    "/index.html": "index.html",
+    "/live": "live.html",
+    "/live.html": "live.html",
+    "/styles.css": "styles.css",
+}
+CONTENT_TYPES = {
+    ".html": "text/html",
+    ".css": "text/css",
+}
 
 _lock = threading.Lock()
 _drivers: dict[str, dict] = {}
@@ -84,8 +95,18 @@ def run_collector_forever() -> None:
 
 def _merge(target: dict, updates: dict) -> None:
     for key, value in updates.items():
-        if isinstance(value, dict) and isinstance(target.get(key), dict):
-            _merge(target[key], value)
+        existing = target.get(key)
+        if isinstance(value, dict) and isinstance(existing, dict):
+            _merge(existing, value)
+        elif isinstance(value, dict) and isinstance(existing, list) and all(k.isdigit() for k in value):
+            for index_str, item in value.items():
+                index = int(index_str)
+                while len(existing) <= index:
+                    existing.append({})
+                if isinstance(item, dict) and isinstance(existing[index], dict):
+                    _merge(existing[index], item)
+                else:
+                    existing[index] = item
         else:
             target[key] = value
 
@@ -153,9 +174,11 @@ def build_snapshot() -> dict:
 
             stints = app.get("Stints", {})
             current_stint = None
-            if stints:
+            if isinstance(stints, dict) and stints:
                 last_key = sorted(stints.keys(), key=lambda k: int(k))[-1]
                 current_stint = stints[last_key]
+            elif isinstance(stints, list) and stints:
+                current_stint = stints[-1]
 
             rows.append(
                 {
@@ -211,10 +234,13 @@ class Handler(BaseHTTPRequestHandler):
             self.wfile.write(body)
             return
 
-        if self.path in ("/", "/index.html"):
-            body = INDEX_FILE.read_bytes()
+        page = PAGES.get(self.path)
+        if page:
+            file_path = BASE_DIR / page
+            body = file_path.read_bytes()
+            content_type = CONTENT_TYPES.get(file_path.suffix, "application/octet-stream")
             self.send_response(200)
-            self.send_header("Content-Type", "text/html")
+            self.send_header("Content-Type", content_type)
             self.send_header("Content-Length", str(len(body)))
             self.end_headers()
             self.wfile.write(body)

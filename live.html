@@ -1,0 +1,93 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="utf-8" />
+<title>F1 Clean Air — Live</title>
+<link rel="stylesheet" href="/styles.css" />
+</head>
+<body>
+  <nav>
+    <div class="brand">F1 <span>Clean</span> Air</div>
+    <div class="links">
+      <a href="/">Home</a>
+      <a href="/live" class="active">Live</a>
+    </div>
+  </nav>
+
+  <div class="live-wrap">
+    <div class="live-header">
+      <h1>Live Timing</h1>
+      <div class="meta" id="session-meta">Connecting…</div>
+    </div>
+    <table>
+      <thead>
+        <tr>
+          <th class="mono">Pos</th>
+          <th>Driver</th>
+          <th>Team</th>
+          <th class="mono">Gap</th>
+          <th class="mono">Interval</th>
+          <th class="mono">Last Lap</th>
+          <th class="mono">Best Lap</th>
+          <th>Tyre</th>
+          <th class="mono">Laps</th>
+        </tr>
+      </thead>
+      <tbody id="rows"></tbody>
+    </table>
+    <div class="updated" id="updated"></div>
+  </div>
+
+<script>
+async function refresh() {
+  try {
+    const res = await fetch('/api/state');
+    const data = await res.json();
+    render(data);
+  } catch (e) {
+    document.getElementById('session-meta').textContent = 'Connection error — retrying…';
+  }
+}
+
+function render(data) {
+  const meta = document.getElementById('session-meta');
+  const session = data.session || {};
+  const track = data.track_status || {};
+  const parts = [];
+  if (session.Meeting?.Name) parts.push(session.Meeting.Name);
+  if (session.Name) parts.push(session.Name);
+  if (track.Status) parts.push('Track: ' + track.Status);
+  meta.textContent = parts.length ? parts.join(' · ') : 'Waiting for session data…';
+
+  const rows = document.getElementById('rows');
+  rows.innerHTML = '';
+  for (const d of data.drivers) {
+    const tr = document.createElement('tr');
+    const tyreClass = d.compound ? 'tyre-' + d.compound : '';
+    const statusBadge = d.retired ? '<span class="out">OUT</span>'
+      : d.in_pit ? '<span class="pit">PIT</span>' : '';
+    tr.innerHTML = `
+      <td class="pos">${d.position ?? '-'}</td>
+      <td>
+        <span class="team-bar" style="background:#${d.team_colour || '444'}"></span>
+        <span class="tla">${d.tla || d.racing_number}</span> ${statusBadge}
+      </td>
+      <td>${d.team || ''}</td>
+      <td class="mono">${d.gap_to_leader || ''}</td>
+      <td class="mono">${d.interval || ''}</td>
+      <td class="mono">${d.last_lap || ''}</td>
+      <td class="mono">${d.best_lap || ''}</td>
+      <td>${d.compound ? `<span class="tyre-badge ${tyreClass}">${d.compound[0]} ${d.tyre_age ?? ''}</span>` : ''}</td>
+      <td class="mono">${d.laps ?? ''}</td>
+    `;
+    rows.appendChild(tr);
+  }
+
+  document.getElementById('updated').textContent = 'Last updated: ' + new Date().toLocaleTimeString();
+}
+
+refresh();
+setInterval(refresh, 2000);
+</script>
+</body>
+</html>

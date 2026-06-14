@@ -2,107 +2,99 @@
 <html lang="en">
 <head>
 <meta charset="utf-8" />
-<title>F1 Clean Air — Live</title>
-<style>
-  :root { color-scheme: dark; }
-  body {
-    margin: 0;
-    font-family: -apple-system, BlinkMacSystemFont, "Segoe UI", sans-serif;
-    background: #0b0d10;
-    color: #e8e8e8;
-    padding: 24px;
-  }
-  h1 { margin: 0 0 4px; font-size: 22px; letter-spacing: 0.5px; }
-  .meta { color: #9aa0a6; font-size: 13px; margin-bottom: 16px; }
-  table { width: 100%; border-collapse: collapse; font-size: 14px; }
-  th, td { padding: 8px 10px; text-align: left; border-bottom: 1px solid #222; }
-  th { color: #9aa0a6; font-weight: 500; text-transform: uppercase; font-size: 11px; letter-spacing: 1px; }
-  tr:hover td { background: #15181c; }
-  .team-bar { display: inline-block; width: 4px; height: 18px; vertical-align: middle; margin-right: 8px; border-radius: 2px; }
-  .pos { font-weight: 700; width: 30px; }
-  .tla { font-weight: 700; }
-  .pit { color: #ffb84d; font-weight: 600; }
-  .out { color: #777; }
-  .compound-SOFT { color: #ff4d4d; font-weight: 700; }
-  .compound-MEDIUM { color: #ffd23f; font-weight: 700; }
-  .compound-HARD { color: #f5f5f5; font-weight: 700; }
-  .compound-INTERMEDIATE { color: #3ddc84; font-weight: 700; }
-  .compound-WET { color: #4da6ff; font-weight: 700; }
-  .status { padding: 2px 8px; border-radius: 4px; font-size: 12px; }
-  .updated { color: #555; font-size: 12px; margin-top: 12px; }
-</style>
+<title>F1 Clean Air — Real analytics are only visible in clean air</title>
+<link rel="stylesheet" href="/styles.css" />
 </head>
 <body>
-  <h1>F1 CLEAN AIR — LIVE TIMING</h1>
-  <div class="meta" id="session-meta">Connecting…</div>
-  <table>
-    <thead>
-      <tr>
-        <th>Pos</th>
-        <th>Driver</th>
-        <th>Team</th>
-        <th>Gap</th>
-        <th>Interval</th>
-        <th>Last Lap</th>
-        <th>Best Lap</th>
-        <th>Tyre</th>
-        <th>Laps</th>
-      </tr>
-    </thead>
-    <tbody id="rows"></tbody>
-  </table>
-  <div class="updated" id="updated"></div>
+  <nav>
+    <div class="brand">F1 <span>Clean</span> Air</div>
+    <div class="links">
+      <a href="/" class="active">Home</a>
+      <a href="/live">Live</a>
+    </div>
+  </nav>
 
-<script>
-async function refresh() {
-  try {
-    const res = await fetch('/api/state');
-    const data = await res.json();
-    render(data);
-  } catch (e) {
-    document.getElementById('session-meta').textContent = 'Connection error — retrying…';
-  }
-}
+  <div class="hero">
+    <div class="kicker">F1 Analytics &middot; Live Race Intelligence</div>
+    <h1>Real analytics are only visible in clean air.</h1>
+    <p class="lead">
+      We cut the clutter and show you the real numbers — the forward-looking ones
+      that tell you what is about to happen, not just what you can already see on screen.
+    </p>
+    <a class="cta" href="/live"><span class="live-dot"></span> Watch Live Timing</a>
+  </div>
 
-function render(data) {
-  const meta = document.getElementById('session-meta');
-  const session = data.session || {};
-  const track = data.track_status || {};
-  const parts = [];
-  if (session.Meeting?.Name) parts.push(session.Meeting.Name);
-  if (session.Name) parts.push(session.Name);
-  if (track.Status) parts.push('Track: ' + track.Status);
-  meta.textContent = parts.length ? parts.join(' · ') : 'Waiting for session data…';
+  <div class="section">
+    <h2>What we show</h2>
+    <div class="grid-3">
+      <div class="card">
+        <h3>Finish Probability</h3>
+        <p>Updated every lap — who is likely to hold position, and by how much.</p>
+      </div>
+      <div class="card">
+        <h3>Undercut Windows</h3>
+        <p>"Undercut window open. +1.4s advantage if VER pits this lap." One number, no noise.</p>
+      </div>
+      <div class="card">
+        <h3>Tyre Degradation</h3>
+        <p>Cliff warnings before they become obvious on TV — based on stint pace and tyre age.</p>
+      </div>
+      <div class="card">
+        <h3>Gap Trajectories</h3>
+        <p>Closing, stable, or pulling away — with the rate, not just the raw gap.</p>
+      </div>
+      <div class="card">
+        <h3>Championship Delta</h3>
+        <p>"+7 points to Norris if this holds." The standings impact of what's happening right now.</p>
+      </div>
+      <div class="card">
+        <h3>Safety Car Risk</h3>
+        <p>Context for the variables that could flip the race in an instant.</p>
+      </div>
+    </div>
+  </div>
 
-  const rows = document.getElementById('rows');
-  rows.innerHTML = '';
-  for (const d of data.drivers) {
-    const tr = document.createElement('tr');
-    const compoundClass = d.compound ? 'compound-' + d.compound : '';
-    const statusBadge = d.retired ? '<span class="out">OUT</span>'
-      : d.in_pit ? '<span class="pit">PIT</span>' : '';
-    tr.innerHTML = `
-      <td class="pos">${d.position ?? '-'}</td>
-      <td>
-        <span class="team-bar" style="background:#${d.team_colour || '444'}"></span>
-        <span class="tla">${d.tla || d.racing_number}</span> ${statusBadge}
-      </td>
-      <td>${d.team || ''}</td>
-      <td>${d.gap_to_leader || ''}</td>
-      <td>${d.interval || ''}</td>
-      <td>${d.last_lap || ''}</td>
-      <td>${d.best_lap || ''}</td>
-      <td class="${compoundClass}">${d.compound || ''}${d.tyre_age != null ? ' (' + d.tyre_age + ')' : ''}</td>
-      <td>${d.laps ?? ''}</td>
-    `;
-    rows.appendChild(tr);
-  }
+  <div class="section">
+    <h2>Example output</h2>
 
-  document.getElementById('updated').textContent = 'Last updated: ' + new Date().toLocaleTimeString();
-}
+    <div class="example-row">
+      <div class="mono">NOR</div>
+      <div class="bar-track"><div class="bar-fill" style="width:68%"></div></div>
+      <div class="mono">68% P1</div>
+    </div>
+    <div class="example-row">
+      <div class="mono">VER</div>
+      <div class="bar-track"><div class="bar-fill" style="width:44%; background:#1C1C28;"></div></div>
+      <div class="mono">44% P1</div>
+    </div>
+    <div class="example-row">
+      <div class="mono">LEC</div>
+      <div class="bar-track"><div class="bar-fill" style="width:21%; background:#1C1C28;"></div></div>
+      <div class="mono">21% P1</div>
+    </div>
 
-refresh();
-setInterval(refresh, 2000);
-</script>
+    <div style="height: 28px;"></div>
+
+    <div class="alert-card">
+      <div class="head" style="color: var(--accent);">◈ Undercut Window Open</div>
+      <div class="body">NOR can jump VER if pit now</div>
+      <div class="data mono">+1.4s estimated advantage</div>
+    </div>
+  </div>
+
+  <div class="section">
+    <h2>Why F1 Clean Air</h2>
+    <p style="color: var(--silver); font-size: 14px; line-height: 1.7; max-width: 700px;">
+      In Formula 1, "clean air" is the aerodynamic advantage a car gains when running free
+      from the turbulent wake of the car ahead — faster, more stable, more predictable.
+      Every other analytics tool gives you the noisy, dirty-air view: raw numbers, cluttered
+      dashboards, data without meaning. F1 Clean Air strips that away. It is not a live timing
+      display — it's an intelligent second screen that tells you what is about to happen.
+    </p>
+  </div>
+
+  <footer>
+    F1 Clean Air &middot; Real analytics are only visible in clean air.
+  </footer>
 </body>
 </html>
