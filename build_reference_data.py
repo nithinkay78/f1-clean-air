@@ -47,6 +47,32 @@ def fetch_season_standings(season: int, kind: str) -> Optional[list]:
     return lists[0][key]
 
 
+def fetch_season_races(season: int) -> list[dict]:
+    races = []
+    offset = 0
+    limit = 100
+    while True:
+        resp = requests.get(f"{BASE_URL}/{season}.json", params={"limit": limit, "offset": offset})
+        resp.raise_for_status()
+        data = resp.json()["MRData"]
+        races.extend(data["RaceTable"]["Races"])
+        total = int(data["total"])
+        offset += limit
+        if offset >= total:
+            break
+        time.sleep(0.3)
+    return [
+        {
+            "round": r["round"],
+            "raceName": r["raceName"],
+            "date": r["date"],
+            "circuitId": r["Circuit"]["circuitId"],
+            "circuitName": r["Circuit"]["circuitName"],
+        }
+        for r in races
+    ]
+
+
 def fetch_circuit_results(circuit_id: str) -> list[dict]:
     races = []
     offset = 0
@@ -100,6 +126,16 @@ def main() -> None:
     (DATA_DIR / "driver_standings.json").write_text(json.dumps(driver_standings, indent=2))
     (DATA_DIR / "constructor_standings.json").write_text(json.dumps(constructor_standings, indent=2))
     print(f"Saved standings for {len(driver_standings)} seasons")
+
+    seasons: dict[str, list[dict]] = {}
+    for season in range(FIRST_SEASON, LAST_SEASON + 1):
+        races = fetch_season_races(season)
+        if races:
+            seasons[str(season)] = races
+        time.sleep(0.2)
+        print(f"Fetched race calendar for {season}")
+    (DATA_DIR / "seasons.json").write_text(json.dumps(seasons, indent=2))
+    print(f"Saved race calendars for {len(seasons)} seasons")
 
     circuit_results: dict[str, dict] = {}
     for i, circuit in enumerate(circuits):
