@@ -28,8 +28,74 @@ EMAIL_RE = re.compile(r"^[^@\s]+@[^@\s]+\.[^@\s]+$")
 
 CIRCUITS = json.loads((BASE_DIR / "data" / "circuits.json").read_text())
 DRIVERS = json.loads((BASE_DIR / "data" / "drivers.json").read_text())
+CONSTRUCTORS = json.loads((BASE_DIR / "data" / "constructors.json").read_text())
+DRIVER_STANDINGS = json.loads((BASE_DIR / "data" / "driver_standings.json").read_text())
+CONSTRUCTOR_STANDINGS = json.loads((BASE_DIR / "data" / "constructor_standings.json").read_text())
+CIRCUIT_RESULTS = json.loads((BASE_DIR / "data" / "circuit_results.json").read_text())
 CIRCUITS_BY_ID = {c["circuitId"]: c for c in CIRCUITS}
 DRIVERS_BY_ID = {d["driverId"]: d for d in DRIVERS}
+CONSTRUCTORS_BY_ID = {c["constructorId"]: c for c in CONSTRUCTORS}
+
+
+def _driver_career_stats(driver_id: str) -> dict:
+    seasons = []
+    wins = 0
+    points = 0.0
+    championships = 0
+    teams = []
+    for season in sorted(DRIVER_STANDINGS, key=int):
+        for entry in DRIVER_STANDINGS[season]:
+            if entry["Driver"]["driverId"] != driver_id:
+                continue
+            team_names = [c["name"] for c in entry["Constructors"]]
+            seasons.append({
+                "season": season,
+                "position": entry["position"],
+                "points": entry["points"],
+                "wins": entry["wins"],
+                "teams": team_names,
+            })
+            wins += int(entry["wins"])
+            points += float(entry["points"])
+            if entry["position"] == "1":
+                championships += 1
+            for name in team_names:
+                if name not in teams:
+                    teams.append(name)
+    return {
+        "seasons": seasons,
+        "wins": wins,
+        "points": points,
+        "championships": championships,
+        "teams": teams,
+    }
+
+
+def _constructor_career_stats(constructor_id: str) -> dict:
+    seasons = []
+    wins = 0
+    points = 0.0
+    championships = 0
+    for season in sorted(CONSTRUCTOR_STANDINGS, key=int):
+        for entry in CONSTRUCTOR_STANDINGS[season]:
+            if entry["Constructor"]["constructorId"] != constructor_id:
+                continue
+            seasons.append({
+                "season": season,
+                "position": entry["position"],
+                "points": entry["points"],
+                "wins": entry["wins"],
+            })
+            wins += int(entry["wins"])
+            points += float(entry["points"])
+            if entry["position"] == "1":
+                championships += 1
+    return {
+        "seasons": seasons,
+        "wins": wins,
+        "points": points,
+        "championships": championships,
+    }
 
 PAGES = {
     "/": "index.html",
@@ -413,7 +479,7 @@ import html as _html
 
 
 def _page_shell(title: str, active: str, body: str) -> str:
-    nav = [("/", "Home"), ("/live", "Live"), ("/circuits", "Circuits"), ("/drivers", "Drivers")]
+    nav = [("/", "Home"), ("/live", "Live"), ("/circuits", "Circuits"), ("/drivers", "Drivers"), ("/constructors", "Constructors")]
     links = "".join(
         f'<a href="{href}" class="{"active" if href == active else ""}">{label}</a>'
         for href, label in nav
@@ -481,6 +547,34 @@ def render_circuits_list() -> str:
 
 def render_circuit_detail(circuit: dict) -> str:
     loc = circuit["Location"]
+    results = CIRCUIT_RESULTS.get(circuit["circuitId"], {})
+    lap_record = results.get("lap_record")
+    lap_record_row = (
+        f"""<tr><th>Lap record</th><td class="mono">{_html.escape(lap_record['time'])} &mdash; {_html.escape(lap_record['driverName'])} ({_html.escape(lap_record['season'])})</td></tr>"""
+        if lap_record
+        else ""
+    )
+
+    winners = results.get("winners", [])
+    winner_rows = "".join(
+        f"""<tr onclick="location.href='/drivers/{_html.escape(w['driverId'])}'">
+          <td class="mono">{_html.escape(w['season'])}</td>
+          <td>{_html.escape(w['raceName'])}</td>
+          <td>{_html.escape(w['driverName'])}</td>
+          <td>{_html.escape(w['constructorName'])}</td>
+        </tr>"""
+        for w in reversed(winners)
+    )
+    winners_section = (
+        f"""<h1 style="margin-top: 40px;">Race winners</h1>
+      <table class="ref-table ref-table-list">
+        <thead><tr><th>Season</th><th>Race</th><th>Winner</th><th>Constructor</th></tr></thead>
+        <tbody>{winner_rows}</tbody>
+      </table>"""
+        if winners
+        else ""
+    )
+
     body = f"""<div class="ref-wrap">
       <a class="back" href="/circuits">&larr; All circuits</a>
       <h1>{_html.escape(circuit['circuitName'])}</h1>
@@ -488,8 +582,10 @@ def render_circuit_detail(circuit: dict) -> str:
         <tr><th>Locality</th><td>{_html.escape(loc['locality'])}</td></tr>
         <tr><th>Country</th><td>{_html.escape(loc['country'])}</td></tr>
         <tr><th>Coordinates</th><td class="mono">{_html.escape(loc['lat'])}, {_html.escape(loc['long'])}</td></tr>
+        {lap_record_row}
         <tr><th>More info</th><td><a href="{_html.escape(circuit['url'])}" target="_blank" rel="noopener">Wikipedia</a></td></tr>
       </table>
+      {winners_section}
     </div>"""
     return _page_shell(f"F1 Clean Air — {circuit['circuitName']}", "/circuits", body)
 
@@ -536,6 +632,37 @@ def render_driver_detail(driver: dict) -> str:
         if url
         else ""
     )
+
+    career = _driver_career_stats(driver["driverId"])
+    career_section = ""
+    if career["seasons"]:
+        championship_row = (
+            f"<tr><th>World Championships</th><td>{career['championships']}</td></tr>"
+            if career["championships"]
+            else ""
+        )
+        career_section = f"""<h1 style="margin-top: 40px;">Career</h1>
+      <table class="ref-table">
+        <tr><th>Career wins</th><td>{career['wins']}</td></tr>
+        <tr><th>Career points</th><td>{career['points']:g}</td></tr>
+        {championship_row}
+        <tr><th>Teams</th><td>{_html.escape(', '.join(career['teams']))}</td></tr>
+      </table>
+      <h1 style="margin-top: 40px;">Season by season</h1>
+      <table class="ref-table ref-table-list">
+        <thead><tr><th>Season</th><th>Position</th><th>Points</th><th>Wins</th><th>Team(s)</th></tr></thead>
+        <tbody>{"".join(
+            f'''<tr>
+              <td class="mono">{_html.escape(s['season'])}</td>
+              <td>{_html.escape(s['position'])}</td>
+              <td>{_html.escape(s['points'])}</td>
+              <td>{_html.escape(s['wins'])}</td>
+              <td>{_html.escape(', '.join(s['teams']))}</td>
+            </tr>'''
+            for s in reversed(career['seasons'])
+        )}</tbody>
+      </table>"""
+
     body = f"""<div class="ref-wrap">
       <a class="back" href="/drivers">&larr; All drivers</a>
       <h1>{_html.escape(driver['givenName'])} {_html.escape(driver['familyName'])}</h1>
@@ -544,8 +671,72 @@ def render_driver_detail(driver: dict) -> str:
         <tr><th>Date of Birth</th><td class="mono">{_html.escape(driver.get('dateOfBirth', '—'))}</td></tr>
         {more_info}
       </table>
+      {career_section}
     </div>"""
     return _page_shell(f"F1 Clean Air — {driver['givenName']} {driver['familyName']}", "/drivers", body)
+
+
+def render_constructors_list() -> str:
+    cards = "".join(
+        f"""<a class="ref-card" href="/constructors/{_html.escape(c['constructorId'])}">
+          <h3>{_html.escape(c['name'])}</h3>
+          <p>{_html.escape(c.get('nationality', '—'))}</p>
+        </a>"""
+        for c in CONSTRUCTORS
+    )
+    body = f"""<div class="ref-wrap">
+      <h1>Constructors</h1>
+      <div class="ref-grid">{cards}</div>
+    </div>"""
+    return _page_shell("F1 Clean Air — Constructors", "/constructors", body)
+
+
+def render_constructor_detail(constructor: dict) -> str:
+    url = constructor.get("url")
+    more_info = (
+        f'<tr><th>More info</th><td><a href="{_html.escape(url)}" target="_blank" rel="noopener">Wikipedia</a></td></tr>'
+        if url
+        else ""
+    )
+
+    career = _constructor_career_stats(constructor["constructorId"])
+    career_section = ""
+    if career["seasons"]:
+        championship_row = (
+            f"<tr><th>Constructors' Championships</th><td>{career['championships']}</td></tr>"
+            if career["championships"]
+            else ""
+        )
+        career_section = f"""<h1 style="margin-top: 40px;">Career</h1>
+      <table class="ref-table">
+        <tr><th>Career wins</th><td>{career['wins']}</td></tr>
+        <tr><th>Career points</th><td>{career['points']:g}</td></tr>
+        {championship_row}
+      </table>
+      <h1 style="margin-top: 40px;">Season by season</h1>
+      <table class="ref-table ref-table-list">
+        <thead><tr><th>Season</th><th>Position</th><th>Points</th><th>Wins</th></tr></thead>
+        <tbody>{"".join(
+            f'''<tr>
+              <td class="mono">{_html.escape(s['season'])}</td>
+              <td>{_html.escape(s['position'])}</td>
+              <td>{_html.escape(s['points'])}</td>
+              <td>{_html.escape(s['wins'])}</td>
+            </tr>'''
+            for s in reversed(career['seasons'])
+        )}</tbody>
+      </table>"""
+
+    body = f"""<div class="ref-wrap">
+      <a class="back" href="/constructors">&larr; All constructors</a>
+      <h1>{_html.escape(constructor['name'])}</h1>
+      <table class="ref-table">
+        <tr><th>Nationality</th><td>{_html.escape(constructor.get('nationality', '—'))}</td></tr>
+        {more_info}
+      </table>
+      {career_section}
+    </div>"""
+    return _page_shell(f"F1 Clean Air — {constructor['name']}", "/constructors", body)
 
 
 # --- HTTP server --------------------------------------------------------------
@@ -623,6 +814,17 @@ class Handler(BaseHTTPRequestHandler):
             driver = DRIVERS_BY_ID.get(self.path[len("/drivers/"):])
             if driver:
                 return self._send_html(render_driver_detail(driver))
+            self.send_response(404)
+            self.end_headers()
+            return
+
+        if self.path in ("/constructors", "/constructors/"):
+            return self._send_html(render_constructors_list())
+
+        if self.path.startswith("/constructors/"):
+            constructor = CONSTRUCTORS_BY_ID.get(self.path[len("/constructors/"):])
+            if constructor:
+                return self._send_html(render_constructor_detail(constructor))
             self.send_response(404)
             self.end_headers()
             return
