@@ -16,6 +16,7 @@ import time
 from datetime import datetime, timezone
 from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
 from pathlib import Path
+from urllib.parse import parse_qs, urlparse
 
 import requests
 from fastf1.livetiming.client import SignalRClient
@@ -134,6 +135,58 @@ def _constructor_career_stats(constructor_id: str) -> dict:
         "points": points,
         "championships": championships,
     }
+
+
+def _compute_all_time_records() -> dict:
+    driver_wins: dict = {}
+    driver_names: dict = {}
+    constructor_wins: dict = {}
+    for results in CIRCUIT_RESULTS.values():
+        for w in results.get("winners", []):
+            did = w["driverId"]
+            driver_wins[did] = driver_wins.get(did, 0) + 1
+            driver_names[did] = w["driverName"]
+            cname = w["constructorName"]
+            constructor_wins[cname] = constructor_wins.get(cname, 0) + 1
+
+    driver_points: dict = {}
+    driver_championships: dict = {}
+    champions = []
+    for season, entries in DRIVER_STANDINGS.items():
+        for e in entries:
+            did = e["Driver"]["driverId"]
+            driver_points[did] = driver_points.get(did, 0.0) + float(e["points"])
+            driver_names.setdefault(did, f"{e['Driver']['givenName']} {e['Driver']['familyName']}")
+            if e.get("position") == "1":
+                driver_championships[did] = driver_championships.get(did, 0) + 1
+                champions.append((season, did))
+
+    constructor_championships: dict = {}
+    for season, entries in CONSTRUCTOR_STANDINGS.items():
+        for e in entries:
+            if e.get("position") == "1":
+                cname = e["Constructor"]["name"]
+                constructor_championships[cname] = constructor_championships.get(cname, 0) + 1
+
+    ages = []
+    for season, did in champions:
+        dob = DRIVERS_BY_ID.get(did, {}).get("dateOfBirth")
+        if dob:
+            ages.append({"season": season, "driverId": did, "age": int(season) - int(dob[:4])})
+
+    return {
+        "driver_names": driver_names,
+        "driver_wins": sorted(driver_wins.items(), key=lambda x: -x[1])[:10],
+        "driver_points": sorted(driver_points.items(), key=lambda x: -x[1])[:10],
+        "driver_championships": sorted(driver_championships.items(), key=lambda x: -x[1])[:10],
+        "constructor_wins": sorted(constructor_wins.items(), key=lambda x: -x[1])[:10],
+        "constructor_championships": sorted(constructor_championships.items(), key=lambda x: -x[1])[:10],
+        "youngest_champion": min(ages, key=lambda a: a["age"]) if ages else None,
+        "oldest_champion": max(ages, key=lambda a: a["age"]) if ages else None,
+    }
+
+
+ALL_TIME_RECORDS = _compute_all_time_records()
 
 PAGES = {
     "/": "index.html",
@@ -517,7 +570,7 @@ import html as _html
 
 
 def _page_shell(title: str, active: str, body: str) -> str:
-    nav = [("/", "Home"), ("/live", "Live"), ("/seasons", "Seasons"), ("/circuits", "Circuits"), ("/drivers", "Drivers"), ("/constructors", "Constructors")]
+    nav = [("/", "Home"), ("/live", "Live"), ("/seasons", "Seasons"), ("/circuits", "Circuits"), ("/drivers", "Drivers"), ("/constructors", "Constructors"), ("/records", "Records"), ("/compare", "Compare")]
     links = "".join(
         f'<a href="{href}" class="{"active" if href == active else ""}">{label}</a>'
         for href, label in nav
@@ -917,6 +970,133 @@ def render_race_detail(season: str, round_: str, race_info: dict) -> str:
     return _page_shell(f"F1 Clean Air — {race_info['raceName']} {season}", "/seasons", body)
 
 
+def render_records() -> str:
+    r = ALL_TIME_RECORDS
+
+    def driver_table(items, label, fmt=str):
+        rows = "".join(
+            f'''<tr onclick="location.href='/drivers/{_html.escape(did)}'">
+              <td class="mono">{i + 1}</td>
+              <td>{_html.escape(r['driver_names'].get(did, did))}</td>
+              <td class="mono">{_html.escape(fmt(val))}</td>
+            </tr>'''
+            for i, (did, val) in enumerate(items)
+        )
+        return f"""<h1 style="margin-top: 40px;">{label}</h1>
+      <table class="ref-table ref-table-list">
+        <thead><tr><th>#</th><th>Driver</th><th>{label}</th></tr></thead>
+        <tbody>{rows}</tbody>
+      </table>"""
+
+    def constructor_table(items, label, fmt=str):
+        rows = "".join(
+            f'''<tr>
+              <td class="mono">{i + 1}</td>
+              <td>{_html.escape(name)}</td>
+              <td class="mono">{_html.escape(fmt(val))}</td>
+            </tr>'''
+            for i, (name, val) in enumerate(items)
+        )
+        return f"""<h1 style="margin-top: 40px;">{label}</h1>
+      <table class="ref-table ref-table-list">
+        <thead><tr><th>#</th><th>Constructor</th><th>{label}</th></tr></thead>
+        <tbody>{rows}</tbody>
+      </table>"""
+
+    champions_section = ""
+    youngest = r["youngest_champion"]
+    oldest = r["oldest_champion"]
+    if youngest and oldest:
+        champions_section = f"""<h1 style="margin-top: 40px;">Champions</h1>
+      <table class="ref-table">
+        <tr><th>Youngest champion</th><td><a href="/drivers/{_html.escape(youngest['driverId'])}">{_html.escape(r['driver_names'].get(youngest['driverId'], youngest['driverId']))}</a> &mdash; age {youngest['age']} ({_html.escape(youngest['season'])})</td></tr>
+        <tr><th>Oldest champion</th><td><a href="/drivers/{_html.escape(oldest['driverId'])}">{_html.escape(r['driver_names'].get(oldest['driverId'], oldest['driverId']))}</a> &mdash; age {oldest['age']} ({_html.escape(oldest['season'])})</td></tr>
+      </table>"""
+
+    body = f"""<div class="ref-wrap">
+      <h1>All-Time Records</h1>
+      {driver_table(r['driver_championships'], "World Championships")}
+      {driver_table(r['driver_wins'], "Race Wins")}
+      {driver_table(r['driver_points'], "Career Points", fmt=lambda v: f"{v:g}")}
+      {constructor_table(r['constructor_championships'], "Constructors' Championships")}
+      {constructor_table(r['constructor_wins'], "Race Wins")}
+      {champions_section}
+    </div>"""
+    return _page_shell("F1 Clean Air — Records", "/records", body)
+
+
+def render_compare(d1: str = "", d2: str = "", c1: str = "", c2: str = "") -> str:
+    def driver_select(name: str, selected: str) -> str:
+        opts = "".join(
+            f'<option value="{_html.escape(d["driverId"])}"{" selected" if d["driverId"] == selected else ""}>'
+            f'{_html.escape(d["givenName"])} {_html.escape(d["familyName"])}</option>'
+            for d in DRIVERS
+        )
+        return f'<select name="{name}">{opts}</select>'
+
+    def constructor_select(name: str, selected: str) -> str:
+        opts = "".join(
+            f'<option value="{_html.escape(c["constructorId"])}"{" selected" if c["constructorId"] == selected else ""}>'
+            f'{_html.escape(c["name"])}</option>'
+            for c in CONSTRUCTORS
+        )
+        return f'<select name="{name}">{opts}</select>'
+
+    def row(label: str, va, vb) -> str:
+        return f"<tr><th>{label}</th><td>{va}</td><td>{vb}</td></tr>"
+
+    driver_result = ""
+    if d1 in DRIVERS_BY_ID and d2 in DRIVERS_BY_ID:
+        da, db = DRIVERS_BY_ID[d1], DRIVERS_BY_ID[d2]
+        ca, cb = _driver_career_stats(d1), _driver_career_stats(d2)
+        driver_result = f"""<table class="ref-table compare-table">
+          <thead><tr><th></th><th>{_html.escape(da['givenName'])} {_html.escape(da['familyName'])}</th><th>{_html.escape(db['givenName'])} {_html.escape(db['familyName'])}</th></tr></thead>
+          <tbody>
+            {row("Nationality", _html.escape(da.get('nationality', '—')), _html.escape(db.get('nationality', '—')))}
+            {row("Date of Birth", _html.escape(da.get('dateOfBirth', '—')), _html.escape(db.get('dateOfBirth', '—')))}
+            {row("Career Wins", ca['wins'], cb['wins'])}
+            {row("Career Points", f"{ca['points']:g}", f"{cb['points']:g}")}
+            {row("World Championships", ca['championships'], cb['championships'])}
+            {row("Teams", _html.escape(', '.join(ca['teams'])), _html.escape(', '.join(cb['teams'])))}
+          </tbody>
+        </table>"""
+
+    constructor_result = ""
+    if c1 in CONSTRUCTORS_BY_ID and c2 in CONSTRUCTORS_BY_ID:
+        ta, tb = CONSTRUCTORS_BY_ID[c1], CONSTRUCTORS_BY_ID[c2]
+        sa, sb = _constructor_career_stats(c1), _constructor_career_stats(c2)
+        constructor_result = f"""<table class="ref-table compare-table">
+          <thead><tr><th></th><th>{_html.escape(ta['name'])}</th><th>{_html.escape(tb['name'])}</th></tr></thead>
+          <tbody>
+            {row("Nationality", _html.escape(ta.get('nationality', '—')), _html.escape(tb.get('nationality', '—')))}
+            {row("Career Wins", sa['wins'], sb['wins'])}
+            {row("Career Points", f"{sa['points']:g}", f"{sb['points']:g}")}
+            {row("Constructors' Championships", sa['championships'], sb['championships'])}
+          </tbody>
+        </table>"""
+
+    body = f"""<div class="ref-wrap">
+      <h1>Compare Drivers</h1>
+      <form class="compare-form" method="get" action="/compare">
+        {driver_select("d1", d1)}
+        <span class="vs">vs</span>
+        {driver_select("d2", d2)}
+        <button type="submit">Compare</button>
+      </form>
+      {driver_result}
+
+      <h1 style="margin-top: 48px;">Compare Constructors</h1>
+      <form class="compare-form" method="get" action="/compare">
+        {constructor_select("c1", c1)}
+        <span class="vs">vs</span>
+        {constructor_select("c2", c2)}
+        <button type="submit">Compare</button>
+      </form>
+      {constructor_result}
+    </div>"""
+    return _page_shell("F1 Clean Air — Compare", "/compare", body)
+
+
 # --- HTTP server --------------------------------------------------------------
 
 
@@ -1027,6 +1207,21 @@ class Handler(BaseHTTPRequestHandler):
             self.send_response(404)
             self.end_headers()
             return
+
+        if self.path in ("/records", "/records/"):
+            return self._send_html(render_records())
+
+        if self.path == "/compare" or self.path.startswith("/compare?"):
+            query = parse_qs(urlparse(self.path).query)
+            d1 = query.get("d1", [""])[0]
+            d2 = query.get("d2", [""])[0]
+            c1 = query.get("c1", [""])[0]
+            c2 = query.get("c2", [""])[0]
+            if not (d1 and d2):
+                d1, d2 = "max_verstappen", "hamilton"
+            if not (c1 and c2):
+                c1, c2 = "red_bull", "ferrari"
+            return self._send_html(render_compare(d1, d2, c1, c2))
 
         self.send_response(404)
         self.end_headers()

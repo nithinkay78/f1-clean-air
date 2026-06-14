@@ -322,6 +322,35 @@ td.mono, th.mono { font-family: "JetBrains Mono", ui-monospace, monospace; }
 
 .favorite-row td:first-child { box-shadow: inset 3px 0 0 var(--accent); }
 
+/* Compare */
+.compare-form { display: flex; align-items: center; gap: 12px; margin-bottom: 24px; flex-wrap: wrap; }
+.compare-form select {
+  background: var(--graphite);
+  border: 1px solid var(--border);
+  color: var(--text);
+  border-radius: 4px;
+  padding: 10px 14px;
+  font-size: 14px;
+  max-width: 240px;
+}
+.compare-form .vs { color: var(--silver); font-size: 12px; text-transform: uppercase; letter-spacing: 1px; }
+.compare-form button {
+  background: var(--accent);
+  color: var(--carbon);
+  border: none;
+  border-radius: 4px;
+  padding: 10px 20px;
+  font-weight: 700;
+  font-size: 13px;
+  text-transform: uppercase;
+  letter-spacing: 0.5px;
+  cursor: pointer;
+}
+.compare-form button:hover { opacity: 0.9; }
+.compare-table th:first-child { width: 200px; }
+.compare-table td { text-align: center; }
+.compare-table thead th:not(:first-child) { text-align: center; }
+
 /* Newsletter */
 .newsletter { max-width: 480px; }
 .newsletter form { display: flex; gap: 8px; margin-top: 16px; }
