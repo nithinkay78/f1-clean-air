@@ -22,6 +22,11 @@ from signalrcore.hub_connection_builder import HubConnectionBuilder
 BASE_DIR = Path(__file__).parent
 DATA_FILE = BASE_DIR / "live_data.txt"
 
+CIRCUITS = json.loads((BASE_DIR / "data" / "circuits.json").read_text())
+DRIVERS = json.loads((BASE_DIR / "data" / "drivers.json").read_text())
+CIRCUITS_BY_ID = {c["circuitId"]: c for c in CIRCUITS}
+DRIVERS_BY_ID = {d["driverId"]: d for d in DRIVERS}
+
 PAGES = {
     "/": "index.html",
     "/index.html": "index.html",
@@ -233,6 +238,104 @@ def build_snapshot() -> dict:
         }
 
 
+# --- Reference pages (circuits / drivers) -------------------------------------
+
+
+import html as _html
+
+
+def _page_shell(title: str, active: str, body: str) -> str:
+    nav = [("/", "Home"), ("/live", "Live"), ("/circuits", "Circuits"), ("/drivers", "Drivers")]
+    links = "".join(
+        f'<a href="{href}" class="{"active" if href == active else ""}">{label}</a>'
+        for href, label in nav
+    )
+    return f"""<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="utf-8" />
+<title>{_html.escape(title)}</title>
+<link rel="stylesheet" href="/styles.css" />
+</head>
+<body>
+  <nav>
+    <div class="brand">F1 <span>Clean</span> Air</div>
+    <div class="links">{links}</div>
+  </nav>
+  {body}
+  <footer>F1 Clean Air &middot; Real analytics are only visible in clean air.</footer>
+</body>
+</html>"""
+
+
+def render_circuits_list() -> str:
+    cards = "".join(
+        f"""<a class="ref-card" href="/circuits/{_html.escape(c['circuitId'])}">
+          <h3>{_html.escape(c['circuitName'])}</h3>
+          <p>{_html.escape(c['Location']['locality'])}, {_html.escape(c['Location']['country'])}</p>
+        </a>"""
+        for c in CIRCUITS
+    )
+    body = f"""<div class="ref-wrap">
+      <h1>Circuits</h1>
+      <div class="ref-grid">{cards}</div>
+    </div>"""
+    return _page_shell("F1 Clean Air — Circuits", "/circuits", body)
+
+
+def render_circuit_detail(circuit: dict) -> str:
+    loc = circuit["Location"]
+    body = f"""<div class="ref-wrap">
+      <a class="back" href="/circuits">&larr; All circuits</a>
+      <h1>{_html.escape(circuit['circuitName'])}</h1>
+      <table class="ref-table">
+        <tr><th>Locality</th><td>{_html.escape(loc['locality'])}</td></tr>
+        <tr><th>Country</th><td>{_html.escape(loc['country'])}</td></tr>
+        <tr><th>Coordinates</th><td class="mono">{_html.escape(loc['lat'])}, {_html.escape(loc['long'])}</td></tr>
+        <tr><th>More info</th><td><a href="{_html.escape(circuit['url'])}" target="_blank" rel="noopener">Wikipedia</a></td></tr>
+      </table>
+    </div>"""
+    return _page_shell(f"F1 Clean Air — {circuit['circuitName']}", "/circuits", body)
+
+
+def render_drivers_list() -> str:
+    rows = "".join(
+        f"""<tr onclick="location.href='/drivers/{_html.escape(d['driverId'])}'">
+          <td>{_html.escape(d['givenName'])} {_html.escape(d['familyName'])}</td>
+          <td>{_html.escape(d.get('nationality', '—'))}</td>
+          <td class="mono">{_html.escape(d.get('dateOfBirth', '—'))}</td>
+        </tr>"""
+        for d in DRIVERS
+    )
+    body = f"""<div class="ref-wrap">
+      <h1>Drivers</h1>
+      <table class="ref-table ref-table-list">
+        <thead><tr><th>Name</th><th>Nationality</th><th>Date of Birth</th></tr></thead>
+        <tbody>{rows}</tbody>
+      </table>
+    </div>"""
+    return _page_shell("F1 Clean Air — Drivers", "/drivers", body)
+
+
+def render_driver_detail(driver: dict) -> str:
+    url = driver.get("url")
+    more_info = (
+        f'<tr><th>More info</th><td><a href="{_html.escape(url)}" target="_blank" rel="noopener">Wikipedia</a></td></tr>'
+        if url
+        else ""
+    )
+    body = f"""<div class="ref-wrap">
+      <a class="back" href="/drivers">&larr; All drivers</a>
+      <h1>{_html.escape(driver['givenName'])} {_html.escape(driver['familyName'])}</h1>
+      <table class="ref-table">
+        <tr><th>Nationality</th><td>{_html.escape(driver.get('nationality', '—'))}</td></tr>
+        <tr><th>Date of Birth</th><td class="mono">{_html.escape(driver.get('dateOfBirth', '—'))}</td></tr>
+        {more_info}
+      </table>
+    </div>"""
+    return _page_shell(f"F1 Clean Air — {driver['givenName']} {driver['familyName']}", "/drivers", body)
+
+
 # --- HTTP server --------------------------------------------------------------
 
 
@@ -266,8 +369,39 @@ class Handler(BaseHTTPRequestHandler):
             self.wfile.write(body)
             return
 
+        if self.path in ("/circuits", "/circuits/"):
+            return self._send_html(render_circuits_list())
+
+        if self.path.startswith("/circuits/"):
+            circuit = CIRCUITS_BY_ID.get(self.path[len("/circuits/"):])
+            if circuit:
+                return self._send_html(render_circuit_detail(circuit))
+            self.send_response(404)
+            self.end_headers()
+            return
+
+        if self.path in ("/drivers", "/drivers/"):
+            return self._send_html(render_drivers_list())
+
+        if self.path.startswith("/drivers/"):
+            driver = DRIVERS_BY_ID.get(self.path[len("/drivers/"):])
+            if driver:
+                return self._send_html(render_driver_detail(driver))
+            self.send_response(404)
+            self.end_headers()
+            return
+
         self.send_response(404)
         self.end_headers()
+
+    def _send_html(self, html_str: str) -> None:
+        body = html_str.encode("utf-8")
+        self.send_response(200)
+        self.send_header("Content-Type", "text/html")
+        self.send_header("Cache-Control", "no-store")
+        self.send_header("Content-Length", str(len(body)))
+        self.end_headers()
+        self.wfile.write(body)
 
 
 def main() -> None:

@@ -205,3 +205,31 @@ td.mono, th.mono { font-family: "JetBrains Mono", ui-monospace, monospace; }
 .tyre-WET { background: rgba(0,136,255,0.15); color: var(--tyre-wet); }
 
 .updated { color: #4a4a5a; font-size: 12px; margin-top: 16px; }
+
+/* Reference pages (circuits / drivers) */
+.ref-wrap { padding: 32px; max-width: 1080px; }
+.ref-wrap h1 { font-size: 20px; font-weight: 600; letter-spacing: 1px; text-transform: uppercase; margin: 0 0 24px; }
+.ref-wrap .back { display: inline-block; color: var(--silver); font-size: 13px; margin-bottom: 18px; }
+.ref-wrap .back:hover { color: var(--text); }
+
+.ref-grid { display: grid; grid-template-columns: repeat(auto-fill, minmax(220px, 1fr)); gap: 16px; }
+.ref-card {
+  display: block;
+  background: var(--graphite);
+  border: 1px solid var(--border);
+  border-radius: 6px;
+  padding: 18px;
+  color: var(--text);
+}
+.ref-card:hover { border-color: var(--accent); }
+.ref-card h3 { margin: 0 0 6px; font-size: 14px; font-weight: 600; }
+.ref-card p { margin: 0; color: var(--silver); font-size: 13px; }
+
+.ref-table { width: 100%; border-collapse: collapse; font-size: 14px; max-width: 600px; }
+.ref-table th, .ref-table td { padding: 10px 12px; text-align: left; border-bottom: 1px solid var(--border); }
+.ref-table th { color: var(--silver); font-weight: 500; text-transform: uppercase; font-size: 11px; letter-spacing: 1px; width: 160px; }
+
+.ref-table-list { max-width: none; }
+.ref-table-list thead th { font-size: 11px; }
+.ref-table-list tbody tr { cursor: pointer; }
+.ref-table-list tbody tr:hover td { background: var(--graphite); }
