@@ -135,6 +135,64 @@ def _fetch_season_progression(season: str) -> dict:
     return data
 
 
+_race_trace_cache: dict = {}
+_race_trace_lock = threading.Lock()
+
+
+def _fetch_race_trace(season: str, round_: str) -> dict:
+    key = f"{season}-{round_}"
+    with _race_trace_lock:
+        cached = _race_trace_cache.get(key)
+        if cached is not None:
+            return cached
+
+    positions: dict[str, list] = {}
+    offset = 0
+    limit = 100
+    total = None
+    while total is None or offset < total:
+        for attempt in range(3):
+            try:
+                resp = requests.get(
+                    f"{JOLPICA_URL}/{season}/{round_}/laps.json",
+                    params={"limit": limit, "offset": offset},
+                    timeout=10,
+                )
+                resp.raise_for_status()
+                data = resp.json()["MRData"]
+                break
+            except requests.RequestException:
+                if attempt == 2:
+                    return {"positions": {}, "drivers": {}}
+                time.sleep(1)
+
+        total = int(data["total"])
+        races = data["RaceTable"]["Races"]
+        if races:
+            for lap in races[0]["Laps"]:
+                lap_num = int(lap["number"])
+                for t in lap["Timings"]:
+                    positions.setdefault(t["driverId"], []).append({
+                        "lap": lap_num,
+                        "position": int(t["position"]),
+                    })
+        offset += limit
+        time.sleep(0.3)
+
+    drivers: dict[str, dict] = {}
+    for did in positions:
+        d = DRIVERS_BY_ID.get(did, {})
+        drivers[did] = {
+            "code": d.get("code") or did[:3].upper(),
+            "name": f"{d.get('givenName', '')} {d.get('familyName', '')}".strip() or did,
+        }
+
+    result = {"positions": positions, "drivers": drivers}
+    with _race_trace_lock:
+        _race_trace_cache[key] = result
+    return result
+
+
 def _driver_career_stats(driver_id: str) -> dict:
     seasons = []
     wins = 0
@@ -1160,6 +1218,98 @@ def render_race_detail(season: str, round_: str, race_info: dict) -> str:
         else '<p style="color: var(--silver);">Results not available for this race.</p>'
     )
 
+    race_trace_section = ""
+    if results:
+        race_trace_section = f"""<h1 style="margin-top: 40px;">Race Trace (Position by Lap)</h1>
+      <div class="chart-wrap" id="race-trace-wrap">
+        <div class="lap-chart-controls" id="race-trace-controls"></div>
+        <div class="chart-scroll">
+          <svg id="race-trace-chart" class="lap-chart"></svg>
+        </div>
+      </div>
+    <script src="/chart-controls.js"></script>
+    <script>
+    (function() {{
+      const PALETTE = ['#E10600','#00D2BE','#0090FF','#FF8700','#1E41FF','#006F62','#900000','#2B4562','#B6BABD','#37BEDD'];
+      let data = null;
+      const selected = new Set();
+
+      function render() {{
+        if (!data) return;
+        const svg = document.getElementById('race-trace-chart');
+        const controls = document.getElementById('race-trace-controls');
+        const {{ positions, drivers }} = data;
+
+        if (!controls.dataset.built) {{
+          const ids = Object.keys(positions).sort((a, b) => {{
+            const pa = (positions[a][positions[a].length - 1] || {{}}).position || 99;
+            const pb = (positions[b][positions[b].length - 1] || {{}}).position || 99;
+            return pa - pb;
+          }});
+          controls.innerHTML = ids.map((id, i) => `
+            <label class="lap-chip">
+              <input type="checkbox" data-id="${{id}}" />
+              <span class="tla" style="color:${{PALETTE[i % PALETTE.length]}}">${{(drivers[id] || {{}}).code || id}}</span>
+            </label>
+          `).join('');
+          ids.slice(0, 6).forEach(id => selected.add(id));
+          controls.querySelectorAll('input').forEach(input => {{
+            input.checked = selected.has(input.dataset.id);
+            input.addEventListener('change', () => {{
+              if (input.checked) selected.add(input.dataset.id);
+              else selected.delete(input.dataset.id);
+              render();
+            }});
+          }});
+          controls.dataset.built = '1';
+          controls.dataset.order = JSON.stringify(ids);
+        }}
+
+        const ids = JSON.parse(controls.dataset.order);
+        const series = ids
+          .filter(id => selected.has(id))
+          .map(id => ({{
+            colour: PALETTE[ids.indexOf(id) % PALETTE.length],
+            points: positions[id],
+          }}))
+          .filter(s => s.points && s.points.length > 0);
+
+        if (!series.length) {{
+          svg.innerHTML = '<text x="10" y="20" fill="var(--silver)" font-size="12">No lap data available.</text>';
+          svg.setAttribute('viewBox', '0 0 800 60');
+          return;
+        }}
+
+        const allPositions = series.flatMap(s => s.points.map(p => p.position));
+        const allLaps = series.flatMap(s => s.points.map(p => p.lap));
+        const maxPos = Math.max(...allPositions);
+        const maxLap = Math.max(...allLaps);
+
+        const W = 800, H = 320, padL = 30, padB = 24, padT = 10, padR = 10;
+        const xPos = lap => padL + (lap - 1) / Math.max(1, maxLap - 1) * (W - padL - padR);
+        const yPos = pos => padT + (pos - 1) / Math.max(1, maxPos - 1) * (H - padT - padB);
+
+        let svgContent = '';
+        for (let p = 1; p <= maxPos; p++) {{
+          const yy = yPos(p);
+          svgContent += `<line x1="${{padL}}" y1="${{yy.toFixed(1)}}" x2="${{W - padR}}" y2="${{yy.toFixed(1)}}" stroke="var(--border)" stroke-width="1"/>`;
+          svgContent += `<text x="2" y="${{(yy + 4).toFixed(1)}}" fill="var(--silver)" font-size="10">${{p}}</text>`;
+        }}
+        for (const s of series) {{
+          const sorted = s.points.slice().sort((a, b) => a.lap - b.lap);
+          const path = sorted.map((p, i) => `${{i === 0 ? 'M' : 'L'}} ${{xPos(p.lap).toFixed(1)}} ${{yPos(p.position).toFixed(1)}}`).join(' ');
+          svgContent += `<path d="${{path}}" fill="none" stroke="${{s.colour}}" stroke-width="2"/>`;
+        }}
+
+        svg.setAttribute('viewBox', `0 0 ${{W}} ${{H}}`);
+        svg.innerHTML = svgContent;
+        initChartControls('race-trace-wrap');
+      }}
+
+      fetch('/api/race-trace/{season}/{round_}').then(r => r.json()).then(d => {{ data = d; render(); }}).catch(() => {{}});
+    }})();
+    </script>"""
+
     qualifying = detail["qualifying"]
     qualifying_section = ""
     if qualifying:
@@ -1213,6 +1363,7 @@ def render_race_detail(season: str, round_: str, race_info: dict) -> str:
       {results_section}
       {sprint_section}
       {qualifying_section}
+      {race_trace_section}
     </div>"""
     return _page_shell(f"F1 Clean Air — {race_info['raceName']} {season}", "/seasons", body)
 
@@ -1490,6 +1641,29 @@ class Handler(BaseHTTPRequestHandler):
                 self.end_headers()
                 return
             data = _fetch_season_progression(season)
+            body = json.dumps(data).encode("utf-8")
+            self.send_response(200)
+            self.send_header("Content-Type", "application/json")
+            self.send_header("Access-Control-Allow-Origin", "*")
+            self.send_header("Cache-Control", "no-store")
+            self.send_header("Content-Length", str(len(body)))
+            self.end_headers()
+            self.wfile.write(body)
+            return
+
+        if self.path.startswith("/api/race-trace/"):
+            parts = self.path[len("/api/race-trace/"):].strip("/").split("/")
+            if len(parts) != 2 or parts[0] not in SEASONS:
+                self.send_response(404)
+                self.end_headers()
+                return
+            season, round_ = parts
+            race_info = next((r for r in SEASONS[season] if r["round"] == round_), None)
+            if not race_info:
+                self.send_response(404)
+                self.end_headers()
+                return
+            data = _fetch_race_trace(season, round_)
             body = json.dumps(data).encode("utf-8")
             self.send_response(200)
             self.send_header("Content-Type", "application/json")
