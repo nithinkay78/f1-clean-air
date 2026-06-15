@@ -315,7 +315,9 @@ def fetch_schedule() -> None:
                 "round": race.get("round"),
                 "race_name": race.get("raceName"),
                 "date": race.get("date"),
+                "time": race.get("time"),
                 "circuit_id": race["Circuit"]["circuitId"],
+                "circuit_name": race["Circuit"]["circuitName"],
                 "country": race["Circuit"]["Location"]["country"],
             }
             for race in races
@@ -586,6 +588,9 @@ def _page_shell(title: str, active: str, body: str) -> str:
   <nav>
     <div class="brand">F1 <span>Clean</span> Air</div>
     <div class="links">{links}</div>
+    <form class="search-form" action="/search" method="get">
+      <input type="text" name="q" placeholder="Search drivers, teams, circuits..." />
+    </form>
   </nav>
   {body}
   <footer>
@@ -1097,6 +1102,75 @@ def render_compare(d1: str = "", d2: str = "", c1: str = "", c2: str = "") -> st
     return _page_shell("F1 Clean Air — Compare", "/compare", body)
 
 
+def render_search(query: str) -> str:
+    q = query.strip().lower()
+
+    sections = []
+    if q:
+        drivers = [
+            d for d in DRIVERS
+            if q in f"{d['givenName']} {d['familyName']}".lower()
+        ][:20]
+        if drivers:
+            cards = "".join(
+                f"""<a class="ref-card" href="/drivers/{_html.escape(d['driverId'])}">
+                  <h3>{_html.escape(d['givenName'])} {_html.escape(d['familyName'])}</h3>
+                  <p>{_html.escape(d.get('nationality', '—'))}</p>
+                </a>"""
+                for d in drivers
+            )
+            sections.append(f'<h1 style="margin-top: 40px;">Drivers</h1><div class="ref-grid">{cards}</div>')
+
+        constructors = [c for c in CONSTRUCTORS if q in c["name"].lower()][:20]
+        if constructors:
+            cards = "".join(
+                f"""<a class="ref-card" href="/constructors/{_html.escape(c['constructorId'])}">
+                  <h3>{_html.escape(c['name'])}</h3>
+                  <p>{_html.escape(c.get('nationality', '—'))}</p>
+                </a>"""
+                for c in constructors
+            )
+            sections.append(f'<h1 style="margin-top: 40px;">Constructors</h1><div class="ref-grid">{cards}</div>')
+
+        circuits = [
+            c for c in CIRCUITS
+            if q in c["circuitName"].lower()
+            or q in c["Location"]["locality"].lower()
+            or q in c["Location"]["country"].lower()
+        ][:20]
+        if circuits:
+            cards = "".join(
+                f"""<a class="ref-card" href="/circuits/{_html.escape(c['circuitId'])}">
+                  <h3>{_html.escape(c['circuitName'])}</h3>
+                  <p>{_html.escape(c['Location']['locality'])}, {_html.escape(c['Location']['country'])}</p>
+                </a>"""
+                for c in circuits
+            )
+            sections.append(f'<h1 style="margin-top: 40px;">Circuits</h1><div class="ref-grid">{cards}</div>')
+
+        if q.isdigit() and q in SEASONS:
+            sections.append(f"""<h1 style="margin-top: 40px;">Seasons</h1>
+          <div class="ref-grid">
+            <a class="ref-card" href="/seasons/{q}">
+              <h3>{q}</h3>
+              <p>{len(SEASONS[q])} races</p>
+            </a>
+          </div>""")
+
+    if not q:
+        results = '<p style="color: var(--silver);">Enter a search term above.</p>'
+    elif not sections:
+        results = '<p style="color: var(--silver);">No results found.</p>'
+    else:
+        results = "".join(sections)
+
+    body = f"""<div class="ref-wrap">
+      <h1>Search{f': "{_html.escape(query)}"' if q else ""}</h1>
+      {results}
+    </div>"""
+    return _page_shell("F1 Clean Air — Search", "", body)
+
+
 # --- HTTP server --------------------------------------------------------------
 
 
@@ -1119,6 +1193,19 @@ class Handler(BaseHTTPRequestHandler):
 
         if self.path.startswith("/api/teams"):
             body = json.dumps(build_teams()).encode("utf-8")
+            self.send_response(200)
+            self.send_header("Content-Type", "application/json")
+            self.send_header("Access-Control-Allow-Origin", "*")
+            self.send_header("Cache-Control", "no-store")
+            self.send_header("Content-Length", str(len(body)))
+            self.end_headers()
+            self.wfile.write(body)
+            return
+
+        if self.path.startswith("/api/schedule"):
+            with _schedule_lock:
+                schedule = list(_schedule_cache)
+            body = json.dumps(schedule).encode("utf-8")
             self.send_response(200)
             self.send_header("Content-Type", "application/json")
             self.send_header("Access-Control-Allow-Origin", "*")
@@ -1222,6 +1309,11 @@ class Handler(BaseHTTPRequestHandler):
             if not (c1 and c2):
                 c1, c2 = "red_bull", "ferrari"
             return self._send_html(render_compare(d1, d2, c1, c2))
+
+        if self.path == "/search" or self.path.startswith("/search?"):
+            query = parse_qs(urlparse(self.path).query)
+            q = query.get("q", [""])[0]
+            return self._send_html(render_search(q))
 
         self.send_response(404)
         self.end_headers()

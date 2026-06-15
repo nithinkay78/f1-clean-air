@@ -17,9 +17,16 @@
     <div class="links">
       <a href="/" class="active">Home</a>
       <a href="/live">Live</a>
+      <a href="/seasons">Seasons</a>
       <a href="/circuits">Circuits</a>
       <a href="/drivers">Drivers</a>
+      <a href="/constructors">Constructors</a>
+      <a href="/records">Records</a>
+      <a href="/compare">Compare</a>
     </div>
+    <form class="search-form" action="/search" method="get">
+      <input type="text" name="q" placeholder="Search drivers, teams, circuits..." />
+    </form>
   </nav>
 
   <div class="hero">
@@ -30,6 +37,12 @@
       that tell you what is about to happen, not just what you can already see on screen.
     </p>
     <a class="cta" href="/live"><span class="live-dot"></span> Watch Live Timing</a>
+  </div>
+
+  <div class="section">
+    <h2>Race Calendar</h2>
+    <div id="next-race" class="next-race"></div>
+    <div class="ref-grid" id="upcoming-races"></div>
   </div>
 
   <div class="section">
@@ -123,6 +136,71 @@
       <a href="#" target="_blank" rel="noopener">Newsletter</a>
     </div>
   </footer>
+  <script>
+const COUNTRY_TO_ISO = {
+  "Australia": "au", "China": "cn", "Japan": "jp", "USA": "us", "Canada": "ca",
+  "Monaco": "mc", "Spain": "es", "Austria": "at", "UK": "gb", "Belgium": "be",
+  "Hungary": "hu", "Netherlands": "nl", "Italy": "it", "Azerbaijan": "az",
+  "Singapore": "sg", "Mexico": "mx", "Brazil": "br", "Qatar": "qa", "UAE": "ae",
+  "Bahrain": "bh", "Saudi Arabia": "sa", "Germany": "de", "France": "fr",
+  "Portugal": "pt", "Russia": "ru", "Turkey": "tr", "India": "in", "South Korea": "kr",
+};
+
+function renderCalendar(schedule) {
+  const now = new Date();
+  const upcoming = schedule
+    .map(r => ({ ...r, dt: new Date(`${r.date}T${r.time || '00:00:00Z'}`) }))
+    .filter(r => r.dt > now)
+    .sort((a, b) => a.dt - b.dt);
+
+  const nextRaceEl = document.getElementById('next-race');
+  const upcomingEl = document.getElementById('upcoming-races');
+
+  if (!upcoming.length) {
+    nextRaceEl.innerHTML = '<p style="color: var(--silver);">No upcoming races scheduled.</p>';
+    upcomingEl.innerHTML = '';
+    return;
+  }
+
+  const next = upcoming[0];
+  nextRaceEl.innerHTML = `
+    <div class="next-race-name">${next.race_name}</div>
+    <div class="next-race-meta">Round ${next.round} &middot; ${next.circuit_name}</div>
+    <div class="countdown" id="countdown"></div>
+  `;
+
+  function tick() {
+    const diff = next.dt - new Date();
+    const el = document.getElementById('countdown');
+    if (!el) return;
+    if (diff <= 0) { el.textContent = 'Race weekend is here!'; return; }
+    const days = Math.floor(diff / 86400000);
+    const hours = Math.floor((diff % 86400000) / 3600000);
+    const mins = Math.floor((diff % 3600000) / 60000);
+    const secs = Math.floor((diff % 60000) / 1000);
+    el.innerHTML = `
+      <div class="cd-unit"><span>${days}</span><label>days</label></div>
+      <div class="cd-unit"><span>${String(hours).padStart(2, '0')}</span><label>hrs</label></div>
+      <div class="cd-unit"><span>${String(mins).padStart(2, '0')}</span><label>min</label></div>
+      <div class="cd-unit"><span>${String(secs).padStart(2, '0')}</span><label>sec</label></div>
+    `;
+  }
+  tick();
+  setInterval(tick, 1000);
+
+  upcomingEl.innerHTML = upcoming.slice(1, 5).map(r => `
+    <a class="ref-card" href="/circuits/${r.circuit_id}">
+      <img class="ref-flag" src="https://flagcdn.com/w80/${COUNTRY_TO_ISO[r.country] || 'xx'}.png" alt="${r.country}" />
+      <h3>${r.race_name}</h3>
+      <p>Round ${r.round} &middot; ${r.date}</p>
+    </a>
+  `).join('');
+}
+
+fetch('/api/schedule').then(r => r.json()).then(renderCalendar).catch(() => {
+  document.getElementById('next-race').innerHTML = '<p style="color: var(--silver);">Calendar unavailable.</p>';
+});
+  </script>
   <script src="/theme.js"></script>
 </body>
 </html>

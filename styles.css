@@ -56,6 +56,16 @@ nav .links a {
   text-transform: uppercase;
 }
 nav .links a.active, nav .links a:hover { color: var(--text); }
+nav .search-form input {
+  background: var(--graphite);
+  border: 1px solid var(--border);
+  color: var(--text);
+  border-radius: 4px;
+  padding: 6px 12px;
+  font-size: 13px;
+  margin-left: 24px;
+  width: 180px;
+}
 
 /* Hero */
 .hero {
@@ -322,6 +332,26 @@ td.mono, th.mono { font-family: "JetBrains Mono", ui-monospace, monospace; }
 
 .favorite-row td:first-child { box-shadow: inset 3px 0 0 var(--accent); }
 
+/* Race calendar */
+.next-race {
+  background: var(--graphite);
+  border: 1px solid var(--border);
+  border-radius: 6px;
+  padding: 24px;
+  margin-bottom: 16px;
+}
+.next-race-name { font-size: 18px; font-weight: 600; }
+.next-race-meta { color: var(--silver); font-size: 13px; margin-top: 4px; }
+.countdown { display: flex; gap: 24px; margin-top: 18px; }
+.cd-unit { display: flex; flex-direction: column; align-items: center; }
+.cd-unit span {
+  font-family: "JetBrains Mono", "IBM Plex Mono", ui-monospace, SFMono-Regular, monospace;
+  font-size: 28px;
+  font-weight: 700;
+  color: var(--accent);
+}
+.cd-unit label { font-size: 11px; text-transform: uppercase; letter-spacing: 1px; color: var(--silver); margin-top: 4px; }
+
 /* Compare */
 .compare-form { display: flex; align-items: center; gap: 12px; margin-bottom: 24px; flex-wrap: wrap; }
 .compare-form select {
@@ -384,6 +414,7 @@ td.mono, th.mono { font-family: "JetBrains Mono", ui-monospace, monospace; }
 @media (max-width: 768px) {
   nav { padding: 14px 16px; flex-wrap: wrap; gap: 10px; }
   nav .links a { margin-left: 0; margin-right: 16px; }
+  nav .search-form input { margin-left: 0; width: 100%; }
 
   .hero { padding: 50px 16px 40px; }
   .hero h1 { font-size: 32px; }
