@@ -71,6 +71,16 @@
 
   <div class="live-wrap">
     <div class="live-header">
+      <h1>Lap Times</h1>
+    </div>
+    <div class="lap-chart-controls" id="lap-chart-controls"></div>
+    <div class="chart-scroll">
+      <svg id="lap-chart" class="lap-chart"></svg>
+    </div>
+  </div>
+
+  <div class="live-wrap">
+    <div class="live-header">
       <h1>Drivers' Championship</h1>
     </div>
     <div class="table-scroll">
@@ -213,6 +223,7 @@ function render(data) {
   }
 
   renderTicker(data.drivers);
+  renderLapChart();
 
   document.getElementById('updated').textContent = 'Last updated: ' + new Date().toLocaleTimeString();
 }
@@ -280,8 +291,94 @@ document.addEventListener('f1prefs-change', () => {
   if (lastStandings) renderStandings(lastStandings);
 });
 
+const TYRE_COLORS = {
+  SOFT: 'var(--tyre-soft)', MEDIUM: 'var(--tyre-medium)', HARD: 'var(--tyre-hard)',
+  INTERMEDIATE: 'var(--tyre-inter)', WET: 'var(--tyre-wet)',
+};
+
+let lastLapsData = null;
+const selectedDrivers = new Set();
+
+function renderLapChart() {
+  if (!lastData || !lastLapsData) return;
+  const svg = document.getElementById('lap-chart');
+  const controls = document.getElementById('lap-chart-controls');
+  const { laps, drivers } = lastLapsData;
+
+  if (!controls.dataset.built) {
+    controls.innerHTML = lastData.drivers.map(d => `
+      <label class="lap-chip">
+        <input type="checkbox" data-num="${d.racing_number}" />
+        <span class="tla" style="color:#${d.team_colour || '888'}">${d.tla || d.racing_number}</span>
+      </label>
+    `).join('');
+    lastData.drivers.slice(0, 3).forEach(d => selectedDrivers.add(d.racing_number));
+    controls.querySelectorAll('input').forEach(input => {
+      input.checked = selectedDrivers.has(input.dataset.num);
+      input.addEventListener('change', () => {
+        if (input.checked) selectedDrivers.add(input.dataset.num);
+        else selectedDrivers.delete(input.dataset.num);
+        renderLapChart();
+      });
+    });
+    controls.dataset.built = '1';
+  }
+
+  const series = [...selectedDrivers].map(num => ({
+    tla: (drivers[num] && drivers[num].tla) || num,
+    colour: (drivers[num] && drivers[num].team_colour) || '888',
+    points: (laps[num] || []).slice().sort((a, b) => a.lap - b.lap),
+  })).filter(s => s.points.length > 0);
+
+  if (!series.length) {
+    svg.innerHTML = '<text x="10" y="20" fill="var(--silver)" font-size="12">No lap data yet.</text>';
+    svg.setAttribute('viewBox', '0 0 800 60');
+    return;
+  }
+
+  const allTimes = series.flatMap(s => s.points.map(p => p.time));
+  const allLaps = series.flatMap(s => s.points.map(p => p.lap));
+  const minTime = Math.min(...allTimes);
+  const maxTime = Math.max(...allTimes);
+  const maxLap = Math.max(...allLaps);
+
+  const W = 800, H = 240, padL = 40, padB = 24, padT = 10, padR = 10;
+  const xPos = lap => padL + (lap - 1) / Math.max(1, maxLap - 1) * (W - padL - padR);
+  const yPos = t => padT + (1 - (t - minTime) / Math.max(0.001, maxTime - minTime)) * (H - padT - padB);
+
+  let svgContent = '';
+  for (let i = 0; i <= 4; i++) {
+    const t = minTime + (maxTime - minTime) * i / 4;
+    const yy = yPos(t);
+    svgContent += `<line x1="${padL}" y1="${yy.toFixed(1)}" x2="${W - padR}" y2="${yy.toFixed(1)}" stroke="var(--border)" stroke-width="1"/>`;
+    svgContent += `<text x="2" y="${(yy + 4).toFixed(1)}" fill="var(--silver)" font-size="10">${t.toFixed(1)}s</text>`;
+  }
+
+  for (const s of series) {
+    const path = s.points.map((p, i) => `${i === 0 ? 'M' : 'L'} ${xPos(p.lap).toFixed(1)} ${yPos(p.time).toFixed(1)}`).join(' ');
+    svgContent += `<path d="${path}" fill="none" stroke="#${s.colour}" stroke-width="2"/>`;
+    for (const p of s.points) {
+      const tyreColour = TYRE_COLORS[(p.compound || '').toUpperCase()] || '#888';
+      svgContent += `<circle cx="${xPos(p.lap).toFixed(1)}" cy="${yPos(p.time).toFixed(1)}" r="3" fill="${tyreColour}" stroke="#${s.colour}" stroke-width="1"/>`;
+    }
+  }
+
+  svg.setAttribute('viewBox', `0 0 ${W} ${H}`);
+  svg.innerHTML = svgContent;
+}
+
+async function refreshLaps() {
+  try {
+    const res = await fetch('/api/laps');
+    lastLapsData = await res.json();
+    renderLapChart();
+  } catch (e) {}
+}
+
 refresh();
 setInterval(refresh, 2000);
+refreshLaps();
+setInterval(refreshLaps, 5000);
 refreshStandings();
 setInterval(refreshStandings, 60000);
 </script>

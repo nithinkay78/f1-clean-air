@@ -34,6 +34,7 @@ DRIVER_STANDINGS = json.loads((BASE_DIR / "data" / "driver_standings.json").read
 CONSTRUCTOR_STANDINGS = json.loads((BASE_DIR / "data" / "constructor_standings.json").read_text())
 CIRCUIT_RESULTS = json.loads((BASE_DIR / "data" / "circuit_results.json").read_text())
 SEASONS = json.loads((BASE_DIR / "data" / "seasons.json").read_text())
+PITSTOPS = json.loads((BASE_DIR / "data" / "pitstops.json").read_text()) if (BASE_DIR / "data" / "pitstops.json").exists() else {}
 CIRCUITS_BY_ID = {c["circuitId"]: c for c in CIRCUITS}
 DRIVERS_BY_ID = {d["driverId"]: d for d in DRIVERS}
 CONSTRUCTORS_BY_ID = {c["constructorId"]: c for c in CONSTRUCTORS}
@@ -70,9 +71,67 @@ def _fetch_race_detail(season: str, round_: str) -> dict:
     except requests.RequestException:
         pass
 
-    data = {"results": results, "qualifying": qualifying}
+    sprint = []
+    try:
+        resp = requests.get(f"{JOLPICA_URL}/{season}/{round_}/sprint.json", timeout=10)
+        resp.raise_for_status()
+        races = resp.json()["MRData"]["RaceTable"]["Races"]
+        if races:
+            sprint = races[0]["SprintResults"]
+    except requests.RequestException:
+        pass
+
+    data = {"results": results, "qualifying": qualifying, "sprint": sprint}
     with _race_result_lock:
         _race_result_cache[key] = data
+    return data
+
+
+_progression_cache: dict = {}
+_progression_lock = threading.Lock()
+
+
+def _fetch_season_progression(season: str) -> dict:
+    with _progression_lock:
+        cached = _progression_cache.get(season)
+        if cached is not None:
+            return cached
+
+    now = datetime.now(timezone.utc)
+    completed_rounds = []
+    for r in SEASONS.get(season, []):
+        try:
+            race_date = datetime.fromisoformat(r["date"]).replace(tzinfo=timezone.utc)
+        except ValueError:
+            continue
+        if race_date < now:
+            completed_rounds.append(r["round"])
+
+    progression: dict[str, list] = {}
+    drivers: dict[str, dict] = {}
+    for round_ in completed_rounds:
+        try:
+            resp = requests.get(f"{JOLPICA_URL}/{season}/{round_}/driverStandings.json", timeout=10)
+            resp.raise_for_status()
+            lists = resp.json()["MRData"]["StandingsTable"]["StandingsLists"]
+            if lists:
+                for entry in lists[0]["DriverStandings"]:
+                    did = entry["Driver"]["driverId"]
+                    progression.setdefault(did, []).append({
+                        "round": int(round_),
+                        "points": float(entry["points"]),
+                    })
+                    drivers.setdefault(did, {
+                        "code": entry["Driver"].get("code") or did[:3].upper(),
+                        "name": f"{entry['Driver']['givenName']} {entry['Driver']['familyName']}",
+                    })
+        except requests.RequestException:
+            pass
+        time.sleep(0.2)
+
+    data = {"progression": progression, "drivers": drivers}
+    with _progression_lock:
+        _progression_cache[season] = data
     return data
 
 
@@ -137,10 +196,20 @@ def _constructor_career_stats(constructor_id: str) -> dict:
     }
 
 
+def _parse_pitstop_seconds(duration: str | None) -> float | None:
+    if not duration:
+        return None
+    try:
+        return float(duration)
+    except ValueError:
+        return None
+
+
 def _compute_all_time_records() -> dict:
     driver_wins: dict = {}
     driver_names: dict = {}
     constructor_wins: dict = {}
+    driver_poles: dict = {}
     for results in CIRCUIT_RESULTS.values():
         for w in results.get("winners", []):
             did = w["driverId"]
@@ -148,6 +217,26 @@ def _compute_all_time_records() -> dict:
             driver_names[did] = w["driverName"]
             cname = w["constructorName"]
             constructor_wins[cname] = constructor_wins.get(cname, 0) + 1
+        for p in results.get("poles", []):
+            did = p["driverId"]
+            driver_poles[did] = driver_poles.get(did, 0) + 1
+            driver_names[did] = p["driverName"]
+
+    fastest_pitstop = None
+    for season, stops in PITSTOPS.items():
+        for stop in stops:
+            secs = _parse_pitstop_seconds(stop.get("duration"))
+            if secs is None:
+                continue
+            if fastest_pitstop is None or secs < fastest_pitstop["seconds"]:
+                fastest_pitstop = {
+                    "seconds": secs,
+                    "season": season,
+                    "round": stop["round"],
+                    "raceName": stop["raceName"],
+                    "driverId": stop["driverId"],
+                    "lap": stop["lap"],
+                }
 
     driver_points: dict = {}
     driver_championships: dict = {}
@@ -179,10 +268,12 @@ def _compute_all_time_records() -> dict:
         "driver_wins": sorted(driver_wins.items(), key=lambda x: -x[1])[:10],
         "driver_points": sorted(driver_points.items(), key=lambda x: -x[1])[:10],
         "driver_championships": sorted(driver_championships.items(), key=lambda x: -x[1])[:10],
+        "driver_poles": sorted(driver_poles.items(), key=lambda x: -x[1])[:10],
         "constructor_wins": sorted(constructor_wins.items(), key=lambda x: -x[1])[:10],
         "constructor_championships": sorted(constructor_championships.items(), key=lambda x: -x[1])[:10],
         "youngest_champion": min(ages, key=lambda a: a["age"]) if ages else None,
         "oldest_champion": max(ages, key=lambda a: a["age"]) if ages else None,
+        "fastest_pitstop": fastest_pitstop,
     }
 
 
@@ -213,6 +304,7 @@ _interval_samples: dict[str, list[float]] = {}
 _stint_lap_times: dict[str, list[float]] = {}
 _last_seen_lap: dict[str, int] = {}
 _last_seen_compound: dict[str, str] = {}
+_lap_history: dict[str, list[dict]] = {}
 _subscribers_lock = threading.Lock()
 
 _standings_lock = threading.Lock()
@@ -493,6 +585,9 @@ def build_snapshot() -> dict:
                 stint_times.append(last_lap_val)
                 del stint_times[:-10]
                 _last_seen_lap[num] = laps_val
+                _lap_history.setdefault(num, []).append(
+                    {"lap": laps_val, "time": last_lap_val, "compound": compound}
+                )
 
             tyre_degradation = None
             stint_times = _stint_lap_times.get(num, [])
@@ -900,6 +995,39 @@ def render_season_detail(season: str) -> str:
         for r in SEASONS.get(season, [])
     )
 
+    teams_map: dict[str, list] = {}
+    for e in DRIVER_STANDINGS.get(season, []):
+        for c in e["Constructors"]:
+            teams_map.setdefault(c["name"], []).append(e)
+
+    h2h_rows = ""
+    for team_name in sorted(teams_map):
+        entries = sorted(teams_map[team_name], key=lambda e: float(e["points"]), reverse=True)
+        if len(entries) < 2:
+            continue
+        for i, e in enumerate(entries):
+            d = e["Driver"]
+            team_cell = (
+                f'<td rowspan="{len(entries)}">{_html.escape(team_name)}</td>' if i == 0 else ""
+            )
+            h2h_rows += f"""<tr onclick="location.href='/drivers/{_html.escape(d['driverId'])}'">
+              {team_cell}
+              <td>{_html.escape(d['givenName'])} {_html.escape(d['familyName'])}</td>
+              <td class="mono">{_html.escape(e.get('position', e['positionText']))}</td>
+              <td class="mono">{_html.escape(e['points'])}</td>
+              <td class="mono">{_html.escape(e['wins'])}</td>
+            </tr>"""
+
+    h2h_section = (
+        f"""<h1 style="margin-top: 40px;">Teammate Head-to-Head</h1>
+      <table class="ref-table ref-table-list">
+        <thead><tr><th>Team</th><th>Driver</th><th>Pos</th><th>Points</th><th>Wins</th></tr></thead>
+        <tbody>{h2h_rows}</tbody>
+      </table>"""
+        if h2h_rows
+        else ""
+    )
+
     body = f"""<div class="ref-wrap">
       <a class="back" href="/seasons">&larr; All seasons</a>
       <h1>{_html.escape(season)} Season</h1>
@@ -909,7 +1037,94 @@ def render_season_detail(season: str) -> str:
       </table>
       {driver_standings_section}
       {constructor_standings_section}
-    </div>"""
+      {h2h_section}
+      <h1 style="margin-top: 40px;">Points Progression</h1>
+      <div class="lap-chart-controls" id="points-chart-controls"></div>
+      <div class="chart-scroll">
+        <svg id="points-chart" class="lap-chart"></svg>
+      </div>
+    </div>
+    <script>
+    (function() {{
+      const PALETTE = ['#E10600','#00D2BE','#0090FF','#FF8700','#1E41FF','#006F62','#900000','#2B4562','#B6BABD','#37BEDD'];
+      let data = null;
+      const selected = new Set();
+
+      function render() {{
+        if (!data) return;
+        const svg = document.getElementById('points-chart');
+        const controls = document.getElementById('points-chart-controls');
+        const {{ progression, drivers }} = data;
+
+        if (!controls.dataset.built) {{
+          const ids = Object.keys(progression).sort((a, b) => {{
+            const pa = (progression[a][progression[a].length - 1] || {{}}).points || 0;
+            const pb = (progression[b][progression[b].length - 1] || {{}}).points || 0;
+            return pb - pa;
+          }});
+          controls.innerHTML = ids.map((id, i) => `
+            <label class="lap-chip">
+              <input type="checkbox" data-id="${{id}}" />
+              <span class="tla" style="color:${{PALETTE[i % PALETTE.length]}}">${{(drivers[id] || {{}}).code || id}}</span>
+            </label>
+          `).join('');
+          ids.slice(0, 6).forEach(id => selected.add(id));
+          controls.querySelectorAll('input').forEach(input => {{
+            input.checked = selected.has(input.dataset.id);
+            input.addEventListener('change', () => {{
+              if (input.checked) selected.add(input.dataset.id);
+              else selected.delete(input.dataset.id);
+              render();
+            }});
+          }});
+          controls.dataset.built = '1';
+          controls.dataset.order = JSON.stringify(ids);
+        }}
+
+        const ids = JSON.parse(controls.dataset.order);
+        const series = ids
+          .filter(id => selected.has(id))
+          .map(id => ({{
+            colour: PALETTE[ids.indexOf(id) % PALETTE.length],
+            points: progression[id],
+          }}))
+          .filter(s => s.points && s.points.length > 0);
+
+        if (!series.length) {{
+          svg.innerHTML = '<text x="10" y="20" fill="var(--silver)" font-size="12">No data available.</text>';
+          svg.setAttribute('viewBox', '0 0 800 60');
+          return;
+        }}
+
+        const allPoints = series.flatMap(s => s.points.map(p => p.points));
+        const allRounds = series.flatMap(s => s.points.map(p => p.round));
+        const maxPts = Math.max(...allPoints);
+        const maxRound = Math.max(...allRounds);
+
+        const W = 800, H = 280, padL = 40, padB = 24, padT = 10, padR = 10;
+        const xPos = round => padL + (round - 1) / Math.max(1, maxRound - 1) * (W - padL - padR);
+        const yPos = pts => padT + (1 - pts / Math.max(0.001, maxPts)) * (H - padT - padB);
+
+        let svgContent = '';
+        for (let i = 0; i <= 4; i++) {{
+          const v = maxPts * i / 4;
+          const yy = yPos(v);
+          svgContent += `<line x1="${{padL}}" y1="${{yy.toFixed(1)}}" x2="${{W - padR}}" y2="${{yy.toFixed(1)}}" stroke="var(--border)" stroke-width="1"/>`;
+          svgContent += `<text x="2" y="${{(yy + 4).toFixed(1)}}" fill="var(--silver)" font-size="10">${{Math.round(v)}}</text>`;
+        }}
+        for (const s of series) {{
+          const sorted = s.points.slice().sort((a, b) => a.round - b.round);
+          const path = sorted.map((p, i) => `${{i === 0 ? 'M' : 'L'}} ${{xPos(p.round).toFixed(1)}} ${{yPos(p.points).toFixed(1)}}`).join(' ');
+          svgContent += `<path d="${{path}}" fill="none" stroke="${{s.colour}}" stroke-width="2"/>`;
+        }}
+
+        svg.setAttribute('viewBox', `0 0 ${{W}} ${{H}}`);
+        svg.innerHTML = svgContent;
+      }}
+
+      fetch('/api/season-progression/{season}').then(r => r.json()).then(d => {{ data = d; render(); }}).catch(() => {{}});
+    }})();
+    </script>"""
     return _page_shell(f"F1 Clean Air — {season} Season", "/seasons", body)
 
 
@@ -960,6 +1175,27 @@ def render_race_detail(season: str, round_: str, race_info: dict) -> str:
         <tbody>{qualifying_rows}</tbody>
       </table>"""
 
+    sprint = detail["sprint"]
+    sprint_section = ""
+    if sprint:
+        sprint_rows = "".join(
+            f"""<tr onclick="location.href='/drivers/{_html.escape(s['Driver']['driverId'])}'">
+              <td>{_html.escape(s['position'])}</td>
+              <td>{_html.escape(s['Driver']['givenName'])} {_html.escape(s['Driver']['familyName'])}</td>
+              <td>{_html.escape(s['Constructor']['name'])}</td>
+              <td class="mono">{_html.escape(s.get('grid', '—'))}</td>
+              <td class="mono">{_html.escape(s.get('laps', '—'))}</td>
+              <td class="mono">{_html.escape((s.get('Time') or {}).get('time') or s.get('status', '—'))}</td>
+              <td>{_html.escape(s.get('points', '0'))}</td>
+            </tr>"""
+            for s in sprint
+        )
+        sprint_section = f"""<h1 style="margin-top: 40px;">Sprint Result</h1>
+      <table class="ref-table ref-table-list">
+        <thead><tr><th>Pos</th><th>Driver</th><th>Team</th><th>Grid</th><th>Laps</th><th>Time/Status</th><th>Pts</th></tr></thead>
+        <tbody>{sprint_rows}</tbody>
+      </table>"""
+
     body = f"""<div class="ref-wrap">
       <a class="back" href="/seasons/{season}">&larr; {_html.escape(season)} Season</a>
       <h1>{_html.escape(race_info['raceName'])} {_html.escape(season)}</h1>
@@ -970,6 +1206,7 @@ def render_race_detail(season: str, round_: str, race_info: dict) -> str:
       </table>
       <h1 style="margin-top: 40px;">Race Result</h1>
       {results_section}
+      {sprint_section}
       {qualifying_section}
     </div>"""
     return _page_shell(f"F1 Clean Air — {race_info['raceName']} {season}", "/seasons", body)
@@ -1018,14 +1255,32 @@ def render_records() -> str:
         <tr><th>Oldest champion</th><td><a href="/drivers/{_html.escape(oldest['driverId'])}">{_html.escape(r['driver_names'].get(oldest['driverId'], oldest['driverId']))}</a> &mdash; age {oldest['age']} ({_html.escape(oldest['season'])})</td></tr>
       </table>"""
 
+    poles_section = (
+        driver_table(r["driver_poles"], "Pole Positions") if r["driver_poles"] else ""
+    )
+
+    pitstop_section = ""
+    fastest = r.get("fastest_pitstop")
+    if fastest:
+        driver = DRIVERS_BY_ID.get(fastest["driverId"], {})
+        driver_name = f"{driver.get('givenName', '')} {driver.get('familyName', '')}".strip() or fastest["driverId"]
+        pitstop_section = f"""<h1 style="margin-top: 40px;">Fastest Pit Stop</h1>
+      <table class="ref-table">
+        <tr><th>Time</th><td class="mono">{fastest['seconds']:.3f}s</td></tr>
+        <tr><th>Driver</th><td><a href="/drivers/{_html.escape(fastest['driverId'])}">{_html.escape(driver_name)}</a></td></tr>
+        <tr><th>Race</th><td><a href="/seasons/{_html.escape(fastest['season'])}/{_html.escape(fastest['round'])}">{_html.escape(fastest['raceName'])} {_html.escape(fastest['season'])}</a> &mdash; Lap {_html.escape(fastest['lap'])}</td></tr>
+      </table>"""
+
     body = f"""<div class="ref-wrap">
       <h1>All-Time Records</h1>
       {driver_table(r['driver_championships'], "World Championships")}
       {driver_table(r['driver_wins'], "Race Wins")}
       {driver_table(r['driver_points'], "Career Points", fmt=lambda v: f"{v:g}")}
+      {poles_section}
       {constructor_table(r['constructor_championships'], "Constructors' Championships")}
       {constructor_table(r['constructor_wins'], "Race Wins")}
       {champions_section}
+      {pitstop_section}
     </div>"""
     return _page_shell("F1 Clean Air — Records", "/records", body)
 
@@ -1182,6 +1437,40 @@ class Handler(BaseHTTPRequestHandler):
         if self.path.startswith("/api/state"):
             snapshot = build_snapshot()
             body = json.dumps(snapshot).encode("utf-8")
+            self.send_response(200)
+            self.send_header("Content-Type", "application/json")
+            self.send_header("Access-Control-Allow-Origin", "*")
+            self.send_header("Cache-Control", "no-store")
+            self.send_header("Content-Length", str(len(body)))
+            self.end_headers()
+            self.wfile.write(body)
+            return
+
+        if self.path.startswith("/api/laps"):
+            with _lock:
+                history = {num: list(laps) for num, laps in _lap_history.items()}
+                drivers = {
+                    num: {"tla": entry.get("info", {}).get("Tla"), "team_colour": entry.get("info", {}).get("TeamColour")}
+                    for num, entry in _drivers.items()
+                }
+            body = json.dumps({"laps": history, "drivers": drivers}).encode("utf-8")
+            self.send_response(200)
+            self.send_header("Content-Type", "application/json")
+            self.send_header("Access-Control-Allow-Origin", "*")
+            self.send_header("Cache-Control", "no-store")
+            self.send_header("Content-Length", str(len(body)))
+            self.end_headers()
+            self.wfile.write(body)
+            return
+
+        if self.path.startswith("/api/season-progression/"):
+            season = self.path[len("/api/season-progression/"):].strip("/")
+            if season not in SEASONS:
+                self.send_response(404)
+                self.end_headers()
+                return
+            data = _fetch_season_progression(season)
+            body = json.dumps(data).encode("utf-8")
             self.send_response(200)
             self.send_header("Content-Type", "application/json")
             self.send_header("Access-Control-Allow-Origin", "*")

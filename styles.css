@@ -301,6 +301,22 @@ td.mono, th.mono { font-family: "JetBrains Mono", ui-monospace, monospace; }
 
 /* Table scroll wrapper (mobile) */
 .table-scroll { overflow-x: auto; }
+.chart-scroll { overflow-x: auto; }
+
+/* Lap chart */
+.lap-chart-controls { display: flex; flex-wrap: wrap; gap: 10px; margin-bottom: 14px; }
+.lap-chip {
+  display: flex;
+  align-items: center;
+  gap: 6px;
+  background: var(--graphite);
+  border: 1px solid var(--border);
+  border-radius: 4px;
+  padding: 4px 10px;
+  font-size: 12px;
+  cursor: pointer;
+}
+.lap-chart { width: 100%; min-width: 600px; height: 240px; }
 
 /* Preferences (theme color + favorites) */
 .prefs { position: relative; }
