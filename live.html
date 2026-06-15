@@ -73,9 +73,11 @@
     <div class="live-header">
       <h1>Lap Times</h1>
     </div>
-    <div class="lap-chart-controls" id="lap-chart-controls"></div>
-    <div class="chart-scroll">
-      <svg id="lap-chart" class="lap-chart"></svg>
+    <div class="chart-wrap" id="lap-chart-wrap">
+      <div class="lap-chart-controls" id="lap-chart-controls"></div>
+      <div class="chart-scroll">
+        <svg id="lap-chart" class="lap-chart"></svg>
+      </div>
     </div>
   </div>
 
@@ -108,6 +110,7 @@
     </div>
   </footer>
 
+<script src="/chart-controls.js"></script>
 <script>
 const settings = JSON.parse(localStorage.getItem('f1cleanair_settings') || '{}');
 if (settings.showDiffs === undefined) settings.showDiffs = true;
@@ -365,6 +368,7 @@ function renderLapChart() {
 
   svg.setAttribute('viewBox', `0 0 ${W} ${H}`);
   svg.innerHTML = svgContent;
+  initChartControls('lap-chart-wrap');
 }
 
 async function refreshLaps() {

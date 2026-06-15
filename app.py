@@ -286,6 +286,7 @@ PAGES = {
     "/live.html": "live.html",
     "/styles.css": "styles.css",
     "/theme.js": "theme.js",
+    "/chart-controls.js": "chart-controls.js",
 }
 CONTENT_TYPES = {
     ".html": "text/html",
@@ -1039,11 +1040,14 @@ def render_season_detail(season: str) -> str:
       {constructor_standings_section}
       {h2h_section}
       <h1 style="margin-top: 40px;">Points Progression</h1>
-      <div class="lap-chart-controls" id="points-chart-controls"></div>
-      <div class="chart-scroll">
-        <svg id="points-chart" class="lap-chart"></svg>
+      <div class="chart-wrap" id="points-chart-wrap">
+        <div class="lap-chart-controls" id="points-chart-controls"></div>
+        <div class="chart-scroll">
+          <svg id="points-chart" class="lap-chart"></svg>
+        </div>
       </div>
     </div>
+    <script src="/chart-controls.js"></script>
     <script>
     (function() {{
       const PALETTE = ['#E10600','#00D2BE','#0090FF','#FF8700','#1E41FF','#006F62','#900000','#2B4562','#B6BABD','#37BEDD'];
@@ -1120,6 +1124,7 @@ def render_season_detail(season: str) -> str:
 
         svg.setAttribute('viewBox', `0 0 ${{W}} ${{H}}`);
         svg.innerHTML = svgContent;
+        initChartControls('points-chart-wrap');
       }}
 
       fetch('/api/season-progression/{season}').then(r => r.json()).then(d => {{ data = d; render(); }}).catch(() => {{}});
@@ -1283,6 +1288,21 @@ def render_records() -> str:
       {pitstop_section}
     </div>"""
     return _page_shell("F1 Clean Air — Records", "/records", body)
+
+
+def _build_sitemap_xml() -> bytes:
+    base = "https://f1cleanair.com"
+    urls = ["/", "/live", "/circuits", "/drivers", "/constructors", "/seasons", "/records", "/compare"]
+    urls += [f"/circuits/{c['circuitId']}" for c in CIRCUITS]
+    urls += [f"/drivers/{d['driverId']}" for d in DRIVERS]
+    urls += [f"/constructors/{c['constructorId']}" for c in CONSTRUCTORS]
+    for season, races in SEASONS.items():
+        urls.append(f"/seasons/{season}")
+        urls += [f"/seasons/{season}/{r['round']}" for r in races]
+
+    body = "".join(f"<url><loc>{base}{u}</loc></url>" for u in urls)
+    xml = f'<?xml version="1.0" encoding="UTF-8"?><urlset xmlns="http://www.sitemaps.org/schemas/sitemap/0.9">{body}</urlset>'
+    return xml.encode("utf-8")
 
 
 def render_compare(d1: str = "", d2: str = "", c1: str = "", c2: str = "") -> str:
@@ -1512,6 +1532,24 @@ class Handler(BaseHTTPRequestHandler):
             self.send_header("Content-Type", "application/json")
             self.send_header("Access-Control-Allow-Origin", "*")
             self.send_header("Cache-Control", "no-store")
+            self.send_header("Content-Length", str(len(body)))
+            self.end_headers()
+            self.wfile.write(body)
+            return
+
+        if self.path == "/sitemap.xml":
+            body = _build_sitemap_xml()
+            self.send_response(200)
+            self.send_header("Content-Type", "application/xml")
+            self.send_header("Content-Length", str(len(body)))
+            self.end_headers()
+            self.wfile.write(body)
+            return
+
+        if self.path == "/robots.txt":
+            body = b"User-agent: *\nAllow: /\nSitemap: https://f1cleanair.com/sitemap.xml\n"
+            self.send_response(200)
+            self.send_header("Content-Type", "text/plain")
             self.send_header("Content-Length", str(len(body)))
             self.end_headers()
             self.wfile.write(body)
