@@ -19,6 +19,7 @@ from pathlib import Path
 from urllib.parse import parse_qs, urlparse
 
 import fastf1
+import pandas as pd
 import requests
 from fastf1.livetiming.client import SignalRClient
 from signalrcore.hub_connection_builder import HubConnectionBuilder
@@ -200,18 +201,18 @@ def _fetch_race_trace(season: str, round_: str) -> dict:
     return result
 
 
-_tyre_strategy_cache: dict = {}
-_tyre_strategy_lock = threading.Lock()
+_session_laps_cache: dict = {}
+_session_laps_lock = threading.Lock()
 
 
-def _fetch_tyre_strategy(season: str, round_: str) -> dict:
+def _fetch_session_laps(season: str, round_: str) -> dict:
     key = f"{season}-{round_}"
-    with _tyre_strategy_lock:
-        cached = _tyre_strategy_cache.get(key)
+    with _session_laps_lock:
+        cached = _session_laps_cache.get(key)
         if cached is not None:
             return cached
 
-    drivers: dict[str, list] = {}
+    drivers: dict[str, dict] = {}
     try:
         session = fastf1.get_session(int(season), int(round_), "R")
         session.load(laps=True, telemetry=False, weather=False, messages=False)
@@ -227,14 +228,28 @@ def _fetch_tyre_strategy(season: str, round_: str) -> dict:
                     "start": int(stint_group["LapNumber"].min()),
                     "end": int(stint_group["LapNumber"].max()),
                 })
-            if stints:
-                drivers[code] = sorted(stints, key=lambda s: s["start"])
+
+            laptimes = []
+            for _, lap in group.iterrows():
+                if pd.isna(lap["LapTime"]) or pd.isna(lap["LapNumber"]):
+                    continue
+                laptimes.append({
+                    "lap": int(lap["LapNumber"]),
+                    "time": round(lap["LapTime"].total_seconds(), 3),
+                    "compound": lap["Compound"] if isinstance(lap["Compound"], str) else None,
+                })
+
+            if stints or laptimes:
+                drivers[code] = {
+                    "stints": sorted(stints, key=lambda s: s["start"]),
+                    "laptimes": laptimes,
+                }
     except Exception:
         drivers = {}
 
     result = {"drivers": drivers}
-    with _tyre_strategy_lock:
-        _tyre_strategy_cache[key] = result
+    with _session_laps_lock:
+        _session_laps_cache[key] = result
     return result
 
 
@@ -1414,6 +1429,103 @@ def render_race_detail(season: str, round_: str, race_info: dict) -> str:
     }})();
     </script>"""
 
+    lap_times_section = ""
+    if results:
+        lap_times_section = f"""<h1 style="margin-top: 40px;">Lap Times</h1>
+      <div class="chart-wrap" id="lap-times-wrap">
+        <div class="lap-chart-controls" id="lap-times-controls"></div>
+        <div class="chart-scroll">
+          <svg id="lap-times-chart" class="lap-chart"></svg>
+        </div>
+      </div>
+    <script src="/chart-controls.js"></script>
+    <script>
+    (function() {{
+      const PALETTE = ['#E10600','#00D2BE','#0090FF','#FF8700','#1E41FF','#006F62','#900000','#2B4562','#B6BABD','#37BEDD'];
+      const TYRE_COLORS = {{
+        SOFT: 'var(--tyre-soft)', MEDIUM: 'var(--tyre-medium)', HARD: 'var(--tyre-hard)',
+        INTERMEDIATE: 'var(--tyre-inter)', WET: 'var(--tyre-wet)',
+      }};
+      const order = {json.dumps(order_codes)};
+      let data = null;
+      const selected = new Set();
+
+      function render() {{
+        if (!data) return;
+        const svg = document.getElementById('lap-times-chart');
+        const controls = document.getElementById('lap-times-controls');
+        const drivers = data.drivers || {{}};
+        const codes = order.filter(c => drivers[c] && drivers[c].length);
+
+        if (!controls.dataset.built) {{
+          controls.innerHTML = codes.map((code, i) => `
+            <label class="lap-chip">
+              <input type="checkbox" data-code="${{code}}" />
+              <span class="tla" style="color:${{PALETTE[i % PALETTE.length]}}">${{code}}</span>
+            </label>
+          `).join('');
+          codes.slice(0, 6).forEach(code => selected.add(code));
+          controls.querySelectorAll('input').forEach(input => {{
+            input.checked = selected.has(input.dataset.code);
+            input.addEventListener('change', () => {{
+              if (input.checked) selected.add(input.dataset.code);
+              else selected.delete(input.dataset.code);
+              render();
+            }});
+          }});
+          controls.dataset.built = '1';
+        }}
+
+        const series = codes
+          .filter(c => selected.has(c))
+          .map(c => ({{
+            colour: PALETTE[codes.indexOf(c) % PALETTE.length],
+            points: drivers[c].slice().sort((a, b) => a.lap - b.lap),
+          }}))
+          .filter(s => s.points.length > 0);
+
+        if (!series.length) {{
+          svg.innerHTML = '<text x="10" y="20" fill="var(--silver)" font-size="12">No lap time data available.</text>';
+          svg.setAttribute('viewBox', '0 0 800 60');
+          return;
+        }}
+
+        const allTimes = series.flatMap(s => s.points.map(p => p.time));
+        const allLaps = series.flatMap(s => s.points.map(p => p.lap));
+        const minTime = Math.min(...allTimes);
+        const maxTime = Math.max(...allTimes);
+        const maxLap = Math.max(...allLaps);
+
+        const W = 800, H = 320, padL = 40, padB = 24, padT = 10, padR = 10;
+        const xPos = lap => padL + (lap - 1) / Math.max(1, maxLap - 1) * (W - padL - padR);
+        const yPos = t => padT + (1 - (t - minTime) / Math.max(0.001, maxTime - minTime)) * (H - padT - padB);
+
+        let svgContent = '';
+        for (let i = 0; i <= 4; i++) {{
+          const t = minTime + (maxTime - minTime) * i / 4;
+          const yy = yPos(t);
+          svgContent += `<line x1="${{padL}}" y1="${{yy.toFixed(1)}}" x2="${{W - padR}}" y2="${{yy.toFixed(1)}}" stroke="var(--border)" stroke-width="1"/>`;
+          svgContent += `<text x="2" y="${{(yy + 4).toFixed(1)}}" fill="var(--silver)" font-size="10">${{t.toFixed(1)}}s</text>`;
+        }}
+
+        for (const s of series) {{
+          const path = s.points.map((p, i) => `${{i === 0 ? 'M' : 'L'}} ${{xPos(p.lap).toFixed(1)}} ${{yPos(p.time).toFixed(1)}}`).join(' ');
+          svgContent += `<path d="${{path}}" fill="none" stroke="${{s.colour}}" stroke-width="2"/>`;
+          for (const p of s.points) {{
+            const tyreColour = TYRE_COLORS[(p.compound || '').toUpperCase()] || '#888';
+            svgContent += `<circle cx="${{xPos(p.lap).toFixed(1)}}" cy="${{yPos(p.time).toFixed(1)}}" r="3" fill="${{tyreColour}}" stroke="${{s.colour}}" stroke-width="1"/>`;
+          }}
+        }}
+
+        svg.setAttribute('viewBox', `0 0 ${{W}} ${{H}}`);
+        svg.innerHTML = svgContent;
+        initChartControls('lap-times-wrap');
+      }}
+
+      fetch('/api/race-laptimes/{season}/{round_}').then(r => r.json()).then(d => {{ data = d; render(); }}).catch(() => {{}});
+    }})();
+    </script>"""
+
     qualifying = detail["qualifying"]
     qualifying_section = ""
     if qualifying:
@@ -1468,6 +1580,7 @@ def render_race_detail(season: str, round_: str, race_info: dict) -> str:
       {sprint_section}
       {qualifying_section}
       {tyre_strategy_section}
+      {lap_times_section}
       {race_trace_section}
     </div>"""
     return _page_shell(f"F1 Clean Air — {race_info['raceName']} {season}", "/seasons", body)
@@ -1779,8 +1892,9 @@ class Handler(BaseHTTPRequestHandler):
             self.wfile.write(body)
             return
 
-        if self.path.startswith("/api/tyre-strategy/"):
-            parts = self.path[len("/api/tyre-strategy/"):].strip("/").split("/")
+        if self.path.startswith("/api/tyre-strategy/") or self.path.startswith("/api/race-laptimes/"):
+            prefix = "/api/tyre-strategy/" if self.path.startswith("/api/tyre-strategy/") else "/api/race-laptimes/"
+            parts = self.path[len(prefix):].strip("/").split("/")
             if len(parts) != 2 or parts[0] not in SEASONS:
                 self.send_response(404)
                 self.end_headers()
@@ -1791,7 +1905,9 @@ class Handler(BaseHTTPRequestHandler):
                 self.send_response(404)
                 self.end_headers()
                 return
-            data = _fetch_tyre_strategy(season, round_)
+            session_laps = _fetch_session_laps(season, round_)
+            field = "stints" if prefix == "/api/tyre-strategy/" else "laptimes"
+            data = {"drivers": {code: d[field] for code, d in session_laps["drivers"].items()}}
             body = json.dumps(data).encode("utf-8")
             self.send_response(200)
             self.send_header("Content-Type", "application/json")
