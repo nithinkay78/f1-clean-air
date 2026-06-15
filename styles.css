@@ -317,6 +317,7 @@ td.mono, th.mono { font-family: "JetBrains Mono", ui-monospace, monospace; }
   cursor: pointer;
 }
 .lap-chart { width: 100%; min-width: 600px; height: 240px; }
+.tyre-chart { height: auto; }
 
 /* Chart fullscreen + zoom controls */
 .chart-wrap { position: relative; }

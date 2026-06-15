@@ -18,9 +18,12 @@ from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
 from pathlib import Path
 from urllib.parse import parse_qs, urlparse
 
+import fastf1
 import requests
 from fastf1.livetiming.client import SignalRClient
 from signalrcore.hub_connection_builder import HubConnectionBuilder
+
+logging.getLogger("fastf1").setLevel(logging.WARNING)
 
 BASE_DIR = Path(__file__).parent
 DATA_FILE = BASE_DIR / "live_data.txt"
@@ -38,6 +41,10 @@ PITSTOPS = json.loads((BASE_DIR / "data" / "pitstops.json").read_text()) if (BAS
 CIRCUITS_BY_ID = {c["circuitId"]: c for c in CIRCUITS}
 DRIVERS_BY_ID = {d["driverId"]: d for d in DRIVERS}
 CONSTRUCTORS_BY_ID = {c["constructorId"]: c for c in CONSTRUCTORS}
+
+FASTF1_CACHE_DIR = BASE_DIR / "data" / "fastf1_cache"
+FASTF1_CACHE_DIR.mkdir(parents=True, exist_ok=True)
+fastf1.Cache.enable_cache(str(FASTF1_CACHE_DIR))
 
 JOLPICA_URL = "https://api.jolpi.ca/ergast/f1"
 _race_result_cache: dict = {}
@@ -190,6 +197,44 @@ def _fetch_race_trace(season: str, round_: str) -> dict:
     result = {"positions": positions, "drivers": drivers}
     with _race_trace_lock:
         _race_trace_cache[key] = result
+    return result
+
+
+_tyre_strategy_cache: dict = {}
+_tyre_strategy_lock = threading.Lock()
+
+
+def _fetch_tyre_strategy(season: str, round_: str) -> dict:
+    key = f"{season}-{round_}"
+    with _tyre_strategy_lock:
+        cached = _tyre_strategy_cache.get(key)
+        if cached is not None:
+            return cached
+
+    drivers: dict[str, list] = {}
+    try:
+        session = fastf1.get_session(int(season), int(round_), "R")
+        session.load(laps=True, telemetry=False, weather=False, messages=False)
+        laps = session.laps
+        for code, group in laps.groupby("Driver"):
+            stints = []
+            for _, stint_group in group.groupby("Stint"):
+                compound = stint_group["Compound"].iloc[0]
+                if not compound or compound == "nan":
+                    continue
+                stints.append({
+                    "compound": compound,
+                    "start": int(stint_group["LapNumber"].min()),
+                    "end": int(stint_group["LapNumber"].max()),
+                })
+            if stints:
+                drivers[code] = sorted(stints, key=lambda s: s["start"])
+    except Exception:
+        drivers = {}
+
+    result = {"drivers": drivers}
+    with _tyre_strategy_lock:
+        _tyre_strategy_cache[key] = result
     return result
 
 
@@ -1310,6 +1355,65 @@ def render_race_detail(season: str, round_: str, race_info: dict) -> str:
     }})();
     </script>"""
 
+    order_codes = []
+    for r in results:
+        d = DRIVERS_BY_ID.get(r["Driver"]["driverId"], {})
+        order_codes.append(d.get("code") or r["Driver"]["driverId"][:3].upper())
+
+    tyre_strategy_section = ""
+    if results:
+        tyre_strategy_section = f"""<h1 style="margin-top: 40px;">Tyre Strategy</h1>
+      <div class="chart-wrap" id="tyre-strategy-wrap">
+        <div class="chart-scroll">
+          <svg id="tyre-strategy-chart" class="lap-chart tyre-chart"></svg>
+        </div>
+      </div>
+    <script src="/chart-controls.js"></script>
+    <script>
+    (function() {{
+      const TYRE_COLORS = {{
+        SOFT: 'var(--tyre-soft)', MEDIUM: 'var(--tyre-medium)', HARD: 'var(--tyre-hard)',
+        INTERMEDIATE: 'var(--tyre-inter)', WET: 'var(--tyre-wet)',
+      }};
+      const order = {json.dumps(order_codes)};
+
+      fetch('/api/tyre-strategy/{season}/{round_}').then(r => r.json()).then(data => {{
+        const svg = document.getElementById('tyre-strategy-chart');
+        const drivers = data.drivers || {{}};
+        const codes = order.filter(c => drivers[c] && drivers[c].length);
+        if (!codes.length) {{
+          svg.innerHTML = '<text x="10" y="20" fill="var(--silver)" font-size="12">Tyre data not available for this race.</text>';
+          svg.setAttribute('viewBox', '0 0 800 60');
+          return;
+        }}
+        const maxLap = Math.max(...codes.flatMap(c => drivers[c].map(s => s.end)));
+        const W = 800, rowH = 22, padL = 46, padR = 10, padT = 10, padB = 24;
+        const H = padT + padB + codes.length * rowH;
+        const xPos = lap => padL + lap / maxLap * (W - padL - padR);
+
+        let svgContent = '';
+        codes.forEach((code, i) => {{
+          const y = padT + i * rowH;
+          svgContent += `<text x="2" y="${{(y + rowH / 2 + 4).toFixed(1)}}" fill="var(--text)" font-size="11">${{code}}</text>`;
+          drivers[code].forEach(s => {{
+            const x1 = xPos(s.start - 1);
+            const x2 = xPos(s.end);
+            const colour = TYRE_COLORS[s.compound] || '#555';
+            svgContent += `<rect x="${{x1.toFixed(1)}}" y="${{y}}" width="${{(x2 - x1).toFixed(1)}}" height="${{rowH - 4}}" fill="${{colour}}" rx="2"/>`;
+          }});
+        }});
+        for (let i = 0; i <= 4; i++) {{
+          const lap = Math.round(maxLap * i / 4);
+          const xx = xPos(lap);
+          svgContent += `<text x="${{xx.toFixed(1)}}" y="${{H - 6}}" fill="var(--silver)" font-size="10" text-anchor="middle">${{lap}}</text>`;
+        }}
+        svg.setAttribute('viewBox', `0 0 ${{W}} ${{H}}`);
+        svg.innerHTML = svgContent;
+        initChartControls('tyre-strategy-wrap');
+      }}).catch(() => {{}});
+    }})();
+    </script>"""
+
     qualifying = detail["qualifying"]
     qualifying_section = ""
     if qualifying:
@@ -1363,6 +1467,7 @@ def render_race_detail(season: str, round_: str, race_info: dict) -> str:
       {results_section}
       {sprint_section}
       {qualifying_section}
+      {tyre_strategy_section}
       {race_trace_section}
     </div>"""
     return _page_shell(f"F1 Clean Air — {race_info['raceName']} {season}", "/seasons", body)
@@ -1664,6 +1769,29 @@ class Handler(BaseHTTPRequestHandler):
                 self.end_headers()
                 return
             data = _fetch_race_trace(season, round_)
+            body = json.dumps(data).encode("utf-8")
+            self.send_response(200)
+            self.send_header("Content-Type", "application/json")
+            self.send_header("Access-Control-Allow-Origin", "*")
+            self.send_header("Cache-Control", "no-store")
+            self.send_header("Content-Length", str(len(body)))
+            self.end_headers()
+            self.wfile.write(body)
+            return
+
+        if self.path.startswith("/api/tyre-strategy/"):
+            parts = self.path[len("/api/tyre-strategy/"):].strip("/").split("/")
+            if len(parts) != 2 or parts[0] not in SEASONS:
+                self.send_response(404)
+                self.end_headers()
+                return
+            season, round_ = parts
+            race_info = next((r for r in SEASONS[season] if r["round"] == round_), None)
+            if not race_info:
+                self.send_response(404)
+                self.end_headers()
+                return
+            data = _fetch_tyre_strategy(season, round_)
             body = json.dumps(data).encode("utf-8")
             self.send_response(200)
             self.send_header("Content-Type", "application/json")
