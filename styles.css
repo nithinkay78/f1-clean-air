@@ -38,6 +38,9 @@ nav {
   align-items: center;
   justify-content: space-between;
   padding: 18px 32px;
+  padding-top: calc(18px + env(safe-area-inset-top));
+  padding-left: calc(32px + env(safe-area-inset-left));
+  padding-right: calc(32px + env(safe-area-inset-right));
   border-bottom: 1px solid var(--border);
 }
 nav .brand {
@@ -147,7 +150,11 @@ nav .search-form input {
 .bar-fill { background: var(--accent); height: 100%; }
 
 footer {
-  padding: 32px; border-top: 1px solid var(--border);
+  padding: 32px;
+  padding-bottom: calc(32px + env(safe-area-inset-bottom));
+  padding-left: calc(32px + env(safe-area-inset-left));
+  padding-right: calc(32px + env(safe-area-inset-right));
+  border-top: 1px solid var(--border);
   color: var(--silver); font-size: 12px; text-align: center;
 }
 .social-links { margin-top: 12px; display: flex; justify-content: center; gap: 18px; }
