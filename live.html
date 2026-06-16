@@ -2,6 +2,11 @@
 <html lang="en">
 <head>
 <meta charset="utf-8" />
+<meta name="viewport" content="width=device-width, initial-scale=1, viewport-fit=cover" />
+<meta name="theme-color" content="#0A0A0F" />
+<meta name="mobile-web-app-capable" content="yes" />
+<meta name="apple-mobile-web-app-capable" content="yes" />
+<meta name="apple-mobile-web-app-status-bar-style" content="black-translucent" />
 <title>F1 Clean Air — Live</title>
 <link rel="stylesheet" href="/styles.css" />
 <script
@@ -109,6 +114,29 @@
       <a href="#" target="_blank" rel="noopener">Newsletter</a>
     </div>
   </footer>
+  <nav class="tab-bar">
+    <a href="/" class="tab-item"><span class="tab-icon">⌂</span><span class="tab-label">Home</span></a>
+    <a href="/live" class="tab-item tab-active"><span class="tab-icon">◉</span><span class="tab-label">Live</span></a>
+    <a href="/seasons" class="tab-item"><span class="tab-icon">🏆</span><span class="tab-label">Seasons</span></a>
+    <a href="/circuits" class="tab-item"><span class="tab-icon">◎</span><span class="tab-label">Circuits</span></a>
+    <a href="/drivers" class="tab-item"><span class="tab-icon">◈</span><span class="tab-label">Drivers</span></a>
+    <button class="tab-item tab-more-btn" onclick="document.getElementById('tab-more-drawer').classList.toggle('open')" aria-label="More">
+      <span class="tab-icon">⋯</span><span class="tab-label">More</span>
+    </button>
+  </nav>
+  <div class="tab-more-drawer" id="tab-more-drawer">
+    <div class="tab-more-backdrop" onclick="document.getElementById('tab-more-drawer').classList.remove('open')"></div>
+    <div class="tab-more-sheet">
+      <div class="tab-more-handle"></div>
+      <a href="/constructors">Teams</a>
+      <a href="/records">Records</a>
+      <a href="/compare">Compare</a>
+      <form action="/search" method="get" class="tab-more-search">
+        <input type="text" name="q" placeholder="Search…" />
+        <button type="submit">Go</button>
+      </form>
+    </div>
+  </div>
 
 <script src="/chart-controls.js"></script>
 <script>

@@ -791,6 +791,18 @@ def _page_shell(title: str, active: str, body: str) -> str:
         f'<a href="{href}" class="{"active" if href == active else ""}">{label}</a>'
         for href, label in nav
     )
+    # Bottom tab bar: 5 primary tabs + "More" drawer for the rest
+    primary_tabs = [("/", "Home", "⌂"), ("/live", "Live", "◉"), ("/seasons", "Seasons", "🏆"), ("/circuits", "Circuits", "◎"), ("/drivers", "Drivers", "◈")]
+    more_items = [("/constructors", "Teams"), ("/records", "Records"), ("/compare", "Compare")]
+    tab_items = "".join(
+        f'<a href="{href}" class="tab-item {"tab-active" if href == active else ""}">'
+        f'<span class="tab-icon">{icon}</span><span class="tab-label">{label}</span></a>'
+        for href, label, icon in primary_tabs
+    )
+    more_links = "".join(
+        f'<a href="{href}" class="{"active" if href == active else ""}">{label}</a>'
+        for href, label in more_items
+    )
     return f"""<!DOCTYPE html>
 <html lang="en">
 <head>
@@ -820,6 +832,23 @@ def _page_shell(title: str, active: str, body: str) -> str:
       <a href="#" target="_blank" rel="noopener">Newsletter</a>
     </div>
   </footer>
+  <nav class="tab-bar">
+    {tab_items}
+    <button class="tab-item tab-more-btn" onclick="document.getElementById('tab-more-drawer').classList.toggle('open')" aria-label="More">
+      <span class="tab-icon">⋯</span><span class="tab-label">More</span>
+    </button>
+  </nav>
+  <div class="tab-more-drawer" id="tab-more-drawer">
+    <div class="tab-more-backdrop" onclick="document.getElementById('tab-more-drawer').classList.remove('open')"></div>
+    <div class="tab-more-sheet">
+      <div class="tab-more-handle"></div>
+      {more_links}
+      <form action="/search" method="get" class="tab-more-search">
+        <input type="text" name="q" placeholder="Search…" />
+        <button type="submit">Go</button>
+      </form>
+    </div>
+  </div>
   <script src="/theme.js"></script>
 </body>
 </html>"""
