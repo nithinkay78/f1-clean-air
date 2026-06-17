@@ -1857,6 +1857,14 @@ class Handler(BaseHTTPRequestHandler):
         pass
 
     def do_GET(self):
+        if self.path == "/health":
+            self.send_response(200)
+            self.send_header("Content-Type", "text/plain")
+            self.send_header("Content-Length", "2")
+            self.end_headers()
+            self.wfile.write(b"ok")
+            return
+
         if self.path.startswith("/api/state"):
             snapshot = build_snapshot()
             body = json.dumps(snapshot).encode("utf-8")
