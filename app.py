@@ -2020,6 +2020,169 @@ class Handler(BaseHTTPRequestHandler):
             self.wfile.write(body)
             return
 
+        # ── React JSON API endpoints ──────────────────────────────────────────
+        if self.path in ("/api/circuits", "/api/circuits/"):
+            data = [{"circuitId": c["circuitId"], "circuitName": c["circuitName"],
+                     "locality": c["Location"]["locality"], "country": c["Location"]["country"]}
+                    for c in CIRCUITS]
+            return self._send_json(data)
+
+        if self.path.startswith("/api/circuits/"):
+            cid = self.path[len("/api/circuits/"):].strip("/")
+            c = CIRCUITS_BY_ID.get(cid)
+            if not c:
+                self.send_response(404); self.end_headers(); return
+            results = CIRCUIT_RESULTS.get(cid, {})
+            return self._send_json({
+                "circuitId": c["circuitId"], "circuitName": c["circuitName"],
+                "locality": c["Location"]["locality"], "country": c["Location"]["country"],
+                "winners": list(reversed(results.get("winners", []))),
+                "lapRecord": results.get("lap_record"),
+            })
+
+        if self.path in ("/api/drivers", "/api/drivers/"):
+            data = [{"driverId": d["driverId"], "code": d.get("code"), "givenName": d["givenName"],
+                     "familyName": d["familyName"], "nationality": d.get("nationality",""),
+                     "dateOfBirth": d.get("dateOfBirth","")} for d in DRIVERS]
+            return self._send_json(data)
+
+        if self.path.startswith("/api/drivers/"):
+            did = self.path[len("/api/drivers/"):].strip("/")
+            d = DRIVERS_BY_ID.get(did)
+            if not d:
+                self.send_response(404); self.end_headers(); return
+            career = _compute_driver_career(did)
+            recent = []
+            for season, races in sorted(SEASONS.items(), reverse=True)[:3]:
+                for race in races:
+                    detail = _fetch_race_detail(season, race["round"])
+                    if detail:
+                        for r in detail.get("results", []):
+                            if r.get("Driver", {}).get("driverId") == did:
+                                recent.append({"season": season, "round": race["round"],
+                                               "raceName": race["raceName"],
+                                               "position": r.get("position",""),
+                                               "points": r.get("points","")})
+            return self._send_json({
+                "driverId": d["driverId"], "code": d.get("code"), "givenName": d["givenName"],
+                "familyName": d["familyName"], "nationality": d.get("nationality",""),
+                "dateOfBirth": d.get("dateOfBirth",""),
+                "career": career, "recentResults": recent[:10],
+            })
+
+        if self.path in ("/api/constructors", "/api/constructors/"):
+            data = [{"constructorId": c["constructorId"], "name": c["name"],
+                     "nationality": c.get("nationality","")} for c in CONSTRUCTORS]
+            return self._send_json(data)
+
+        if self.path.startswith("/api/constructors/"):
+            cid = self.path[len("/api/constructors/"):].strip("/")
+            c = CONSTRUCTORS_BY_ID.get(cid)
+            if not c:
+                self.send_response(404); self.end_headers(); return
+            seasons_hist = []
+            for season, entries in sorted(CONSTRUCTOR_STANDINGS.items(), reverse=True):
+                for e in entries:
+                    if e.get("Constructor", {}).get("constructorId") == cid:
+                        seasons_hist.append({"year": season, "position": e.get("position",""),
+                                             "points": e.get("points",""), "wins": e.get("wins","")})
+            return self._send_json({"constructorId": c["constructorId"], "name": c["name"],
+                                    "nationality": c.get("nationality",""), "seasons": seasons_hist})
+
+        if self.path in ("/api/seasons", "/api/seasons/"):
+            return self._send_json(SEASONS)
+
+        if self.path.startswith("/api/seasons/"):
+            parts = self.path[len("/api/seasons/"):].strip("/").split("/")
+            season = parts[0]
+            if season not in SEASONS:
+                self.send_response(404); self.end_headers(); return
+            if len(parts) == 1:
+                last_round = SEASONS[season][-1]["round"] if SEASONS[season] else "1"
+                ds = DRIVER_STANDINGS.get(season, [])
+                cs = CONSTRUCTOR_STANDINGS.get(season, [])
+                return self._send_json({
+                    "year": season, "races": SEASONS[season],
+                    "driverStandings": [{"position": e.get("position",""),
+                                         "driver_name": f"{e['Driver']['givenName']} {e['Driver']['familyName']}",
+                                         "driver_code": e["Driver"].get("code",""),
+                                         "team": e.get("Constructors",[{}])[0].get("name","") if e.get("Constructors") else "",
+                                         "points": e.get("points",""), "wins": e.get("wins","")} for e in ds],
+                    "constructorStandings": [{"position": e.get("position",""), "name": e["Constructor"]["name"],
+                                              "points": e.get("points",""), "wins": e.get("wins","")} for e in cs],
+                })
+            if len(parts) == 2:
+                round_ = parts[1]
+                race_info = next((r for r in SEASONS[season] if r["round"] == round_), None)
+                if not race_info:
+                    self.send_response(404); self.end_headers(); return
+                detail = _fetch_race_detail(season, round_)
+                if not detail:
+                    self.send_response(404); self.end_headers(); return
+                return self._send_json({
+                    "season": season, "round": round_,
+                    "raceName": race_info["raceName"], "circuitId": race_info["circuitId"],
+                    "circuitName": race_info["circuitName"], "date": race_info["date"],
+                    "results": detail.get("results", []),
+                    "qualifying": detail.get("qualifying", []),
+                    "sprint": detail.get("sprint"),
+                })
+            self.send_response(404); self.end_headers(); return
+
+        if self.path in ("/api/records", "/api/records/"):
+            records = _compute_all_time_records()
+            return self._send_json(records)
+
+        if self.path == "/api/search" or self.path.startswith("/api/search?"):
+            query = parse_qs(urlparse(self.path).query)
+            q = query.get("q", [""])[0].lower().strip()
+            results = []
+            if q:
+                for d in DRIVERS:
+                    name = f"{d['givenName']} {d['familyName']}".lower()
+                    if q in name or q in d.get("code","").lower():
+                        results.append({"type": "driver", "id": d["driverId"],
+                                        "label": f"{d['givenName']} {d['familyName']}",
+                                        "sublabel": d.get("nationality","")})
+                for c in CIRCUITS:
+                    if q in c["circuitName"].lower() or q in c["Location"]["country"].lower():
+                        results.append({"type": "circuit", "id": c["circuitId"],
+                                        "label": c["circuitName"],
+                                        "sublabel": c["Location"]["country"]})
+                for c in CONSTRUCTORS:
+                    if q in c["name"].lower():
+                        results.append({"type": "constructor", "id": c["constructorId"],
+                                        "label": c["name"], "sublabel": c.get("nationality","")})
+            return self._send_json(results[:30])
+
+        # ── Static React build ────────────────────────────────────────────────
+        static_dir = BASE_DIR / "static"
+        if static_dir.exists():
+            # Serve static assets (JS/CSS bundles)
+            if self.path.startswith("/assets/"):
+                asset_path = static_dir / self.path.lstrip("/")
+                if asset_path.exists() and asset_path.is_file():
+                    body = asset_path.read_bytes()
+                    ct = CONTENT_TYPES.get(asset_path.suffix, "application/octet-stream")
+                    self.send_response(200)
+                    self.send_header("Content-Type", ct)
+                    self.send_header("Cache-Control", "public, max-age=31536000, immutable")
+                    self.send_header("Content-Length", str(len(body)))
+                    self.end_headers()
+                    self.wfile.write(body)
+                    return
+            # SPA fallback — serve index.html for all non-API routes
+            spa_index = static_dir / "index.html"
+            if spa_index.exists() and not self.path.startswith("/api/"):
+                body = spa_index.read_bytes()
+                self.send_response(200)
+                self.send_header("Content-Type", "text/html; charset=utf-8")
+                self.send_header("Cache-Control", "no-store")
+                self.send_header("Content-Length", str(len(body)))
+                self.end_headers()
+                self.wfile.write(body)
+                return
+
         if self.path in ("/circuits", "/circuits/"):
             return self._send_html(render_circuits_list())
 
