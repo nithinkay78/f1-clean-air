@@ -1849,6 +1849,118 @@ def render_search(query: str) -> str:
     return _page_shell("F1 Clean Air — Search", "", body)
 
 
+# --- DataFast AI crawler tracking ----------------------------------------------
+
+DATAFAST_WEBSITE_ID = "dfid_q5BVyQi4Xpzk4aXxizxvr"
+DATAFAST_API_URL = "https://datafa.st/api/ai-crawls"
+DATAFAST_DOMAIN = "f1cleanair.com"
+
+# agent substring (lowercase) -> (provider, category)
+_AI_CRAWLERS = {
+    "chatgpt-user": ("OpenAI", "answer_fetch"),
+    "oai-searchbot": ("OpenAI", "search_index"),
+    "gptbot": ("OpenAI", "training"),
+    "claude-user": ("Anthropic", "answer_fetch"),
+    "claude-web": ("Anthropic", "answer_fetch"),
+    "claudebot": ("Anthropic", "training"),
+    "anthropic-ai": ("Anthropic", "training"),
+    "google-notebooklm": ("Google", "answer_fetch"),
+    "google-extended": ("Google", "training"),
+    "googlebot": ("Google", "search_index"),
+    "perplexity-user": ("Perplexity", "answer_fetch"),
+    "perplexitybot": ("Perplexity", "search_index"),
+    "copilot": ("Microsoft", "answer_fetch"),
+    "bingpreview": ("Microsoft", "search_index"),
+    "bingbot": ("Microsoft", "search_index"),
+    "msnbot": ("Microsoft", "search_index"),
+    "meta-externalagent": ("Meta", "training"),
+    "facebookbot": ("Meta", "ai_crawler"),
+    "facebookexternalhit": ("Meta", "ai_crawler"),
+    "xai-web-crawler": ("xAI", "ai_crawler"),
+    "grokbot": ("xAI", "ai_crawler"),
+    "amzn-searchbot": ("Amazon", "search_index"),
+    "amazonbot": ("Amazon", "training"),
+    "applebot-extended": ("Apple", "training"),
+    "applebot": ("Apple", "search_index"),
+    "bytespider": ("ByteDance", "training"),
+    "ccbot": ("Common Crawl", "training"),
+    "diffbot": ("Diffbot", "other"),
+    "duckduckbot": ("DuckDuckGo", "search_index"),
+    "yandexbot": ("Yandex", "search_index"),
+    "cohere-ai": ("Cohere", "training"),
+    "mistralai-user": ("Mistral", "answer_fetch"),
+    "kimi": ("Moonshot", "other"),
+    "deepseek": ("DeepSeek", "other"),
+    "qwen": ("Alibaba", "other"),
+}
+
+_STATIC_EXTENSIONS = (
+    ".js", ".css", ".png", ".jpg", ".jpeg", ".svg", ".webp", ".gif", ".ico",
+    ".woff", ".woff2", ".ttf", ".pdf", ".map", ".json", ".xml", ".txt",
+)
+_EXCLUDED_PREFIXES = ("/api", "/static", "/assets", "/icons", "/.well-known", "/health")
+_STATIC_FETCH_DESTS = {"audio", "image", "script", "style", "font", "video", "track", "embed", "object"}
+
+
+def _classify_ai_crawler(user_agent):
+    if not user_agent:
+        return None
+    ua_lower = user_agent.lower()
+    for agent, (provider, category) in _AI_CRAWLERS.items():
+        if agent in ua_lower:
+            return provider, agent, category
+    return None
+
+
+def _should_track_ai_crawler(method, path):
+    if method not in ("GET", "HEAD"):
+        return False
+    path_lower = path.lower().split("?")[0]
+    if any(path_lower.startswith(p) for p in _EXCLUDED_PREFIXES):
+        return False
+    if path_lower.endswith(_STATIC_EXTENSIONS):
+        return False
+    return True
+
+
+def track_ai_crawler_request(method, path, headers, client_ip):
+    user_agent = headers.get("user-agent", "")
+    crawler = _classify_ai_crawler(user_agent)
+    if crawler is None:
+        return
+    if not _should_track_ai_crawler(method, path):
+        return
+    sec_fetch_dest = (headers.get("sec-fetch-dest") or "").lower()
+    if sec_fetch_dest in _STATIC_FETCH_DESTS:
+        return
+    provider, agent, category = crawler
+
+    def _send():
+        try:
+            requests.post(
+                DATAFAST_API_URL,
+                json={
+                    "websiteId": DATAFAST_WEBSITE_ID,
+                    "domain": DATAFAST_DOMAIN,
+                    "href": path,
+                    "referrer": headers.get("referer", ""),
+                    "ai": {
+                        "provider": provider,
+                        "agent": agent,
+                        "category": category,
+                        "userAgent": user_agent,
+                        "ip": client_ip,
+                        "source": "server_middleware",
+                    },
+                },
+                timeout=1.5,
+            )
+        except Exception:
+            pass
+
+    threading.Thread(target=_send, daemon=True).start()
+
+
 # --- HTTP server --------------------------------------------------------------
 
 
@@ -1857,6 +1969,9 @@ class Handler(BaseHTTPRequestHandler):
         pass
 
     def do_GET(self):
+        client_ip = self.headers.get("cf-connecting-ip") or self.headers.get("x-real-ip") or self.client_address[0]
+        track_ai_crawler_request("GET", self.path, self.headers, client_ip)
+
         if self.path == "/health":
             self.send_response(200)
             self.send_header("Content-Type", "text/plain")
